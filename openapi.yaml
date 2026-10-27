@@ -1,0 +1,189 @@
+openapi: 3.1.0
+
+info:
+  title: FinTrack360 Backend API
+  version: 1.0.0
+  description: |
+    FinTrack360 Backend REST API Documentation.
+
+    This specification documents authentication and user profile endpoints.
+    Replace the example endpoints and responses with your actual Laravel API.
+
+  contact:
+    name: FinTrack360 API Support
+
+servers:
+  - url: http://127.0.0.1:8000/api
+    description: Local development server
+
+  - url: https://your-domain.com/api
+    description: Production server
+
+tags:
+  - name: Authentication
+    description: Authentication and token management
+
+  - name: Users
+    description: Authenticated user information
+
+paths:
+  /login:
+    post:
+      tags:
+        - Authentication
+      summary: Login
+      description: Authenticate a user and return an access token.
+      operationId: login
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: admin@example.com
+                password:
+                  type: string
+                  format: password
+                  example: secret123
+
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                    description: Access token returned by the API
+                    example: eyJhbGciOiJIUzI1NiJ9.example
+                  token_type:
+                    type: string
+                    example: Bearer
+                  expires_in:
+                    type: integer
+                    example: 3600
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /user:
+    get:
+      tags:
+        - Users
+      summary: Get authenticated user
+      description: Return the profile of the authenticated user.
+      operationId: getAuthenticatedUser
+
+      security:
+        - bearerAuth: []
+
+      responses:
+        "200":
+          description: User profile retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /logout:
+    post:
+      tags:
+        - Authentication
+      summary: Logout
+      description: Invalidate the current access token.
+      operationId: logout
+
+      security:
+        - bearerAuth: []
+
+      responses:
+        "200":
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Successfully logged out
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Enter the access token without the Bearer prefix.
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Admin User
+        email:
+          type: string
+          format: email
+          example: admin@example.com
+
+    Error:
+      type: object
+      properties:
+        message:
+          type: string
+          example: The request could not be processed.
+
+    ValidationError:
+      type: object
+      properties:
+        message:
+          type: string
+          example: The given data was invalid.
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+          example:
+            email:
+              - The email field is required.
+
+  responses:
+    Unauthorized:
+      description: Authentication failed or access token is missing or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    ValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationError"
