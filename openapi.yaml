@@ -6,8 +6,20 @@ info:
   description: |
     FinTrack360 Backend REST API Documentation.
 
-    This specification documents authentication and user profile endpoints.
-    Replace the example endpoints and responses with your actual Laravel API.
+    This specification documents the routes defined in `routes/api.php`.
+
+    ## Authentication
+    The API uses **Laravel Sanctum SPA (session cookie) authentication**, not bearer tokens.
+
+    1. Call `GET /csrf-token` to start a session and get a CSRF token.
+    2. Call `POST /login` with the `X-CSRF-TOKEN` header. On success the session cookie
+       is authenticated and a new `csrf_token` is returned.
+    3. Send the session cookie and the latest `X-CSRF-TOKEN` with every following
+       `POST` request (for example `POST /logout`).
+
+    The client origin must be listed in `SANCTUM_STATEFUL_DOMAINS`, otherwise the
+    session endpoints return `400`. Browser clients must send requests with credentials
+    (`withCredentials: true` / `credentials: "include"`).
 
   contact:
     name: FinTrack360 API Support
@@ -20,20 +32,67 @@ servers:
     description: Production server
 
 tags:
-  - name: Authentication
-    description: Authentication and token management
+  - name: General
+    description: Health check
 
-  - name: Users
-    description: Authenticated user information
+  - name: Authentication
+    description: Session-based login and logout (Sanctum SPA)
 
 paths:
+  /test:
+    get:
+      tags:
+        - General
+      summary: API health check
+      description: Returns a simple message to confirm the API is reachable.
+      operationId: test
+
+      responses:
+        "200":
+          description: API is working
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: API is working!
+
+  /csrf-token:
+    get:
+      tags:
+        - Authentication
+      summary: Get CSRF token
+      description: |
+        Starts a session and returns a CSRF token. Cross-origin SPA clients use this
+        because they cannot read the `XSRF-TOKEN` cookie. Send the token in the
+        `X-CSRF-TOKEN` header on `POST /login` and `POST /logout`.
+      operationId: getCsrfToken
+
+      responses:
+        "200":
+          description: CSRF token returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CsrfToken"
+
+        "400":
+          $ref: "#/components/responses/SessionUnavailable"
+
   /login:
     post:
       tags:
         - Authentication
       summary: Login
-      description: Authenticate a user and return an access token.
+      description: |
+        Authenticates the user with the web session guard. Only users with
+        status `Approved` can log in. Limited to 5 requests per minute.
       operationId: login
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
 
       requestBody:
         required: true
@@ -53,64 +112,76 @@ paths:
                   type: string
                   format: password
                   example: secret123
+                remember:
+                  type: boolean
+                  description: Keep the user logged in ("remember me").
+                  default: false
+                  example: false
 
       responses:
         "200":
-          description: Login successful
+          description: Login successful. The session is now authenticated.
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  access_token:
+                  message:
                     type: string
-                    description: Access token returned by the API
-                    example: eyJhbGciOiJIUzI1NiJ9.example
-                  token_type:
+                    example: Login successful.
+                  csrf_token:
                     type: string
-                    example: Bearer
-                  expires_in:
-                    type: integer
-                    example: 3600
+                    description: New CSRF token to use for the following requests.
+                    example: kT3s9QwXv2mL8pR1aZ7cN4yB6hJ0dF5eG2uI9oP1
+
+        "400":
+          $ref: "#/components/responses/SessionUnavailable"
 
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: Wrong email or password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Invalid email or password.
+
+        "403":
+          description: The account exists but its status is not `Approved`
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Your account is not active.
+                  csrf_token:
+                    type: string
+                    example: kT3s9QwXv2mL8pR1aZ7cN4yB6hJ0dF5eG2uI9oP1
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
 
         "422":
           $ref: "#/components/responses/ValidationError"
 
-  /user:
-    get:
-      tags:
-        - Users
-      summary: Get authenticated user
-      description: Return the profile of the authenticated user.
-      operationId: getAuthenticatedUser
-
-      security:
-        - bearerAuth: []
-
-      responses:
-        "200":
-          description: User profile retrieved successfully
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/User"
-
-        "401":
-          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /logout:
     post:
       tags:
         - Authentication
       summary: Logout
-      description: Invalidate the current access token.
+      description: Logs the user out, invalidates the session and returns a new CSRF token.
       operationId: logout
 
       security:
-        - bearerAuth: []
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
 
       responses:
         "200":
@@ -122,33 +193,43 @@ paths:
                 properties:
                   message:
                     type: string
-                    example: Successfully logged out
+                    example: Logged out successfully.
+                  csrf_token:
+                    type: string
+                    example: kT3s9QwXv2mL8pR1aZ7cN4yB6hJ0dF5eG2uI9oP1
 
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
 components:
   securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
-      description: Enter the access token without the Bearer prefix.
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: laravel_session
+      description: |
+        Laravel session cookie set by `GET /csrf-token` and authenticated by `POST /login`.
+        The actual cookie name comes from `SESSION_COOKIE` (default: the app name + `_session`).
+
+  parameters:
+    CsrfHeader:
+      name: X-CSRF-TOKEN
+      in: header
+      required: true
+      description: CSRF token from `GET /csrf-token` or from the last login/logout response.
+      schema:
+        type: string
 
   schemas:
-    User:
+    CsrfToken:
       type: object
       properties:
-        id:
-          type: integer
-          example: 1
-        name:
+        csrf_token:
           type: string
-          example: Admin User
-        email:
-          type: string
-          format: email
-          example: admin@example.com
+          example: kT3s9QwXv2mL8pR1aZ7cN4yB6hJ0dF5eG2uI9oP1
 
     Error:
       type: object
@@ -162,7 +243,7 @@ components:
       properties:
         message:
           type: string
-          example: The given data was invalid.
+          example: The email field is required.
         errors:
           type: object
           additionalProperties:
@@ -174,12 +255,32 @@ components:
               - The email field is required.
 
   responses:
-    Unauthorized:
-      description: Authentication failed or access token is missing or invalid.
+    SessionUnavailable:
+      description: No session for this origin. The origin is missing from `SANCTUM_STATEFUL_DOMAINS`.
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+          example:
+            message: Session is not available for this origin. Check SANCTUM_STATEFUL_DOMAINS.
+
+    Unauthorized:
+      description: Not logged in or the session has expired.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            message: Unauthenticated.
+
+    CsrfMismatch:
+      description: CSRF token is missing, invalid or expired. Call `GET /csrf-token` again.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            message: CSRF token mismatch.
 
     ValidationError:
       description: Request validation failed.
@@ -187,3 +288,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ValidationError"
+
+    TooManyRequests:
+      description: Too many login attempts. Limit is 5 requests per minute.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            message: Too Many Attempts.
