@@ -32,33 +32,10 @@ servers:
     description: Production server
 
 tags:
-  - name: General
-    description: Health check
-
   - name: Authentication
     description: Session-based login and logout (Sanctum SPA)
 
 paths:
-  /test:
-    get:
-      tags:
-        - General
-      summary: API health check
-      description: Returns a simple message to confirm the API is reachable.
-      operationId: test
-
-      responses:
-        "200":
-          description: API is working
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: API is working!
-
   /csrf-token:
     get:
       tags:
