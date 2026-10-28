@@ -28,7 +28,7 @@ servers:
   - url: http://127.0.0.1:8000/api
     description: Local development server
 
-  - url: https://your-domain.com/api
+  - url: https://backend-fintrack360.eduguard360.com/api
     description: Production server
 
 tags:
