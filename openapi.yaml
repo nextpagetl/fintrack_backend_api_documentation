@@ -25,11 +25,8 @@ info:
     name: FinTrack360 API Support
 
 servers:
-  - url: http://127.0.0.1:8000/api
-    description: Local development server
-
   - url: https://backend-fintrack360.eduguard360.com/api
-    description: Production server
+    description: Demo server
 
 tags:
   - name: Authentication
