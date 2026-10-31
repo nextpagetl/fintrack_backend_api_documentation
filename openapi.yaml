@@ -182,7 +182,7 @@ paths:
         "419":
           $ref: "#/components/responses/CsrfMismatch"
 
-  /user:
+  /user/me:
     get:
       tags:
         - User
