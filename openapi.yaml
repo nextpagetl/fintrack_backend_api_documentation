@@ -31,6 +31,10 @@ servers:
 tags:
   - name: Authentication
     description: Session-based login and logout (Sanctum SPA)
+  - name: User
+    description: The currently logged-in user
+  - name: Dashboard
+    description: Company dashboard data
 
 paths:
   /csrf-token:
@@ -178,6 +182,75 @@ paths:
         "419":
           $ref: "#/components/responses/CsrfMismatch"
 
+  /user:
+    get:
+      tags:
+        - User
+      summary: Get current user
+      description: Returns the details of the logged-in user.
+      operationId: getCurrentUser
+
+      security:
+        - sessionCookie: []
+
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/User"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /dashboard:
+    get:
+      tags:
+        - Dashboard
+      summary: Get dashboard data
+      description: |
+        Returns all dashboard sections for the logged-in user's company in one response.
+
+        - `business_summary`: day-by-day totals from the 1st of the current month to today.
+        - `sales_and_collection`: month-by-month totals for the current year (Jan–Dec).
+        - `top_products`: products by total sales amount, all time, highest first.
+        - `top_customers`: customers by total sales subtotal, highest first.
+        - `recent_transactions`: up to 15 purchase lines and 15 sale lines, newest date first.
+        - `inventory_alert`: current stock per product, lowest quantity first.
+
+        Amounts and quantities are returned as decimal strings (for example `"21754.0000"`).
+        Lists are not paginated.
+
+        Super admin users (`role_id = 1`) get `403`.
+      operationId: getDashboard
+
+      security:
+        - sessionCookie: []
+
+      responses:
+        "200":
+          description: Dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dashboard"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          description: The user is a super admin (`role_id = 1`). The dashboard is not available for this role yet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: Development ongoing
+
 components:
   securitySchemes:
     sessionCookie:
@@ -211,6 +284,253 @@ components:
         message:
           type: string
           example: The request could not be processed.
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 2
+        name:
+          type: string
+          example: Admin
+        email:
+          type: string
+          format: email
+          example: admin@example.com
+        role_id:
+          type: integer
+          description: "`1` = super admin, `2` = company admin."
+          example: 2
+        company_id:
+          type: [integer, "null"]
+          example: 1
+        status:
+          type: string
+          example: Approved
+        email_verified_at:
+          type: [string, "null"]
+          format: date-time
+          example: null
+
+    Decimal:
+      type: [string, number]
+      description: Decimal value. Usually a string such as `"21754.0000"`; can be the number `0`.
+      example: "21754.0000"
+
+    ProductRef:
+      type: [object, "null"]
+      properties:
+        id:
+          type: integer
+          example: 10
+        name:
+          type: string
+          example: Softener RT
+
+    Dashboard:
+      type: object
+      properties:
+        business_summary:
+          $ref: "#/components/schemas/BusinessSummary"
+        sales_and_collection:
+          $ref: "#/components/schemas/SalesAndCollection"
+        top_products:
+          type: array
+          items:
+            $ref: "#/components/schemas/TopProduct"
+        top_customers:
+          type: array
+          items:
+            $ref: "#/components/schemas/TopCustomer"
+        recent_transactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecentTransaction"
+        inventory_alert:
+          type: array
+          items:
+            $ref: "#/components/schemas/InventoryAlert"
+
+    BusinessSummary:
+      type: object
+      description: |
+        Parallel arrays, one entry per day of the current month up to today. Index `0` is an
+        opening entry dated the 1st of the month: its sales, purchases and collection are `0`,
+        and its receivables/payables hold the opening balance. The other entries are that day's
+        total (receivables/payables: that day's net change). The sum of each array is the
+        month's total (receivables/payables: today's closing balance).
+      properties:
+        dates:
+          type: array
+          items:
+            type: string
+            format: date
+          example: ["2026-10-01", "2026-10-01", "2026-10-02"]
+        totalSales:
+          description: General sales + POS sales (`grand_total`).
+          type: array
+          items:
+            $ref: "#/components/schemas/Decimal"
+          example: [0, "21754.0000", "18200.0000"]
+        totalPurchases:
+          type: array
+          items:
+            $ref: "#/components/schemas/Decimal"
+          example: [0, "3900.0000", "0.0000"]
+        totalCollection:
+          type: array
+          items:
+            $ref: "#/components/schemas/Decimal"
+          example: [0, "24188.0000", "9500.0000"]
+        totalAccountsReceivables:
+          type: array
+          items:
+            $ref: "#/components/schemas/Decimal"
+          example: ["468649.0165", "2066.0000", "-1200.0000"]
+        totalAccountsPayables:
+          type: array
+          items:
+            $ref: "#/components/schemas/Decimal"
+          example: ["1531863.4825", "3900.0000", "0.0000"]
+
+    SalesAndCollection:
+      type: object
+      description: Parallel arrays with 12 entries, one per month of the current year.
+      properties:
+        dates:
+          type: array
+          items:
+            type: string
+          example: ["Jan", "Feb", "Mar"]
+        sales:
+          description: General sales + POS sales for the month.
+          type: array
+          items:
+            $ref: "#/components/schemas/Decimal"
+          example: ["477766.5250", "428187.9000", "0.0000"]
+        collections:
+          type: array
+          items:
+            $ref: "#/components/schemas/Decimal"
+          example: ["448329.7500", "493622.0650", "0.0000"]
+
+    TopProduct:
+      type: object
+      properties:
+        product_id:
+          type: integer
+          example: 10
+        quantity:
+          $ref: "#/components/schemas/Decimal"
+        total_price:
+          $ref: "#/components/schemas/Decimal"
+        sales_id:
+          type: integer
+          description: Taken from one arbitrary sale line of the product; not meaningful.
+          example: 1
+        branch_id:
+          type: [integer, "null"]
+          example: 1
+        store_id:
+          type: [integer, "null"]
+          example: 2
+        id:
+          type: integer
+          description: Taken from one arbitrary sale line of the product; not meaningful.
+          example: 1
+        company_id:
+          type: integer
+          example: 1
+        product:
+          $ref: "#/components/schemas/ProductRef"
+      example:
+        quantity: "312818.850000"
+        total_price: "1149449.850000"
+        sales_id: 1
+        product_id: 10
+        branch_id: 1
+        store_id: 2
+        id: 1
+        company_id: 1
+        product:
+          id: 10
+          name: Softener RT
+
+    TopCustomer:
+      type: object
+      properties:
+        subtotal:
+          $ref: "#/components/schemas/Decimal"
+        customer_id:
+          type: [integer, "null"]
+          example: 1535
+        customerName:
+          type: [string, "null"]
+          example: Global Trading Service Ltd
+      example:
+        subtotal: "656447.000000"
+        customer_id: 1535
+        customerName: Global Trading Service Ltd
+
+    RecentTransaction:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+          example: "2025-01-05"
+        type:
+          type: string
+          enum: [purchase, sale]
+          example: purchase
+        product_id:
+          type: integer
+          example: 12
+        quantity:
+          $ref: "#/components/schemas/Decimal"
+        total_price:
+          $ref: "#/components/schemas/Decimal"
+        product:
+          $ref: "#/components/schemas/ProductRef"
+      example:
+        date: "2025-01-05"
+        quantity: "550.000000"
+        total_price: "1006.500000"
+        product_id: 12
+        type: purchase
+        product:
+          id: 12
+          name: Fixing Agent DFA-600
+
+    InventoryAlert:
+      type: object
+      properties:
+        product_id:
+          type: integer
+          example: 79
+        quantity:
+          description: Current stock quantity.
+          $ref: "#/components/schemas/Decimal"
+        product:
+          type: [object, "null"]
+          properties:
+            id:
+              type: integer
+              example: 79
+            name:
+              type: string
+              example: Detergent SINOJAN-7L
+            low_stock:
+              description: Low-stock threshold set on the product.
+              $ref: "#/components/schemas/Decimal"
+      example:
+        quantity: "0.000000"
+        product_id: 79
+        product:
+          id: 79
+          name: Detergent SINOJAN-7L
+          low_stock: "100.000000"
 
     ValidationError:
       type: object
