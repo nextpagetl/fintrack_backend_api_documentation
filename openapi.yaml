@@ -15,7 +15,13 @@ info:
     2. Call `POST /login` with the `X-CSRF-TOKEN` header. On success the session cookie
        is authenticated and a new `csrf_token` is returned.
     3. Send the session cookie and the latest `X-CSRF-TOKEN` with every following
-       `POST` request (for example `POST /logout`).
+       `POST`, `PUT` and `PATCH` request (for example `POST /logout`, `PUT /roles/{id}`).
+
+    ## Permissions
+    Role endpoints also need a Spatie permission, named
+    `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
+    each endpoint's description; without it the API returns `403`. The `superadmin` role
+    passes every permission check.
 
     The client origin must be listed in `SANCTUM_STATEFUL_DOMAINS`, otherwise the
     session endpoints return `400`. Browser clients must send requests with credentials
@@ -35,6 +41,8 @@ tags:
     description: The currently logged-in user
   - name: Dashboard
     description: Company dashboard data
+  - name: Roles
+    description: User role management (Spatie permission)
 
 paths:
   /csrf-token:
@@ -187,7 +195,10 @@ paths:
       tags:
         - User
       summary: Get current user
-      description: Returns the details of the logged-in user.
+      description: |
+        Returns the details of the logged-in user, with the user's Spatie role and its
+        permissions grouped as a tree (see `PermissionTree`). `role` is `null` when the
+        user has no role assigned.
       operationId: getCurrentUser
 
       security:
@@ -251,6 +262,251 @@ paths:
               example:
                 message: Development ongoing
 
+  /roles:
+    get:
+      tags:
+        - Roles
+      summary: List roles
+      description: |
+        Paginated list of roles (guard `web`) with each role's permissions as a tree.
+        The `superadmin` role is never listed.
+
+        Required permission: `module:system-configuration.menu:user-role.permission:view`
+      operationId: listRoles
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Filter by role name (partial match).
+          schema:
+            type: string
+          example: acc
+        - name: status
+          in: query
+          description: Filter by status. Any other value is ignored.
+          schema:
+            type: string
+            enum: [Active, Inactive]
+        - name: per_page
+          in: query
+          description: Items per page (1–100).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Role list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Role"
+                  meta:
+                    $ref: "#/components/schemas/PaginationMeta"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Roles
+      summary: Create role
+      description: |
+        Creates a role (guard `web`) and gives it the listed permissions.
+
+        Required permission: `module:system-configuration.menu:user-role.permission:create`
+      operationId: createRole
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RoleRequest"
+
+      responses:
+        "201":
+          description: Role created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Role created successfully.
+                  data:
+                    $ref: "#/components/schemas/Role"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /roles/{id}:
+    put:
+      tags:
+        - Roles
+      summary: Update role
+      description: |
+        Updates the role's name and status and **replaces** its permissions with the list sent.
+        If `permissions` is missing or `[]`, all of the role's permissions are removed, so always
+        send the full list. If `status` is missing, the current status is kept.
+
+        Required permission: `module:system-configuration.menu:user-role.permission:edit`
+      operationId: updateRole
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/RoleId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RoleRequest"
+
+      responses:
+        "200":
+          description: Role updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Role updated successfully.
+                  data:
+                    $ref: "#/components/schemas/Role"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/RoleNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /roles/{id}/status:
+    patch:
+      tags:
+        - Roles
+      summary: Change role status
+      description: |
+        Sets the role's status to `Active` or `Inactive`. Only the stored value changes;
+        users with an `Inactive` role keep their permissions.
+
+        Required permission: `module:system-configuration.menu:user-role.permission:change-status`
+      operationId: updateRoleStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/RoleId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Active, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Status updated successfully.
+                  data:
+                    $ref: "#/components/schemas/Role"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/RoleNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
 components:
   securitySchemes:
     sessionCookie:
@@ -269,6 +525,15 @@ components:
       description: CSRF token from `GET /csrf-token` or from the last login/logout response.
       schema:
         type: string
+
+    RoleId:
+      name: id
+      in: path
+      required: true
+      description: Role ID. The `superadmin` role, an unknown ID or a non-numeric ID returns `404`.
+      schema:
+        type: integer
+      example: 2
 
   schemas:
     CsrfToken:
@@ -302,6 +567,15 @@ components:
           type: integer
           description: "`1` = super admin, `2` = company admin."
           example: 2
+        role:
+          type: [object, "null"]
+          description: Spatie role of the user. `null` when no role is assigned.
+          properties:
+            name:
+              type: string
+              example: admin
+            permissions:
+              $ref: "#/components/schemas/PermissionTree"
         company_id:
           type: [integer, "null"]
           example: 1
@@ -548,6 +822,101 @@ components:
             email:
               - The email field is required.
 
+    PermissionTree:
+      type: object
+      description: |
+        Permission names `module:<module>.menu:<menu>.permission:<action>` grouped by module and
+        menu. `module` is an empty object `{}` when there are no permissions.
+      properties:
+        module:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              menu:
+                type: object
+                additionalProperties:
+                  type: object
+                  properties:
+                    permission:
+                      type: array
+                      items:
+                        type: string
+      example:
+        module:
+          customer-manage:
+            menu:
+              customer:
+                permission: [view, create, edit, delete, change-status]
+          sales-transaction:
+            menu:
+              sales:
+                permission: [view]
+
+    Role:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 2
+        name:
+          type: string
+          example: admin
+        status:
+          type: string
+          enum: [Active, Inactive]
+          example: Active
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2026-11-05T03:39:15.000000Z"
+        permissions:
+          $ref: "#/components/schemas/PermissionTree"
+
+    RoleRequest:
+      type: object
+      description: |
+        Body for create and update. `permissions` takes full permission names, not the tree.
+        Build each name as `module:<module>.menu:<menu>.permission:<action>`.
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 55
+          description: Must be unique among `web` roles and cannot be `superadmin`.
+          example: Accountant
+        status:
+          type: string
+          enum: [Active, Inactive]
+          description: "Create: defaults to `Active`. Update: keeps the current status when missing."
+          example: Active
+        permissions:
+          type: array
+          description: Existing permission names (guard `web`), no duplicates.
+          items:
+            type: string
+          example:
+            - module:customer-manage.menu:customer.permission:view
+            - module:customer-manage.menu:customer.permission:create
+
+    PaginationMeta:
+      type: object
+      properties:
+        current_page:
+          type: integer
+          example: 1
+        per_page:
+          type: integer
+          example: 10
+        total:
+          type: integer
+          example: 1
+        last_page:
+          type: integer
+          example: 1
+
   responses:
     SessionUnavailable:
       description: No session for this origin. The origin is missing from `SANCTUM_STATEFUL_DOMAINS`.
@@ -575,6 +944,24 @@ components:
             $ref: "#/components/schemas/Error"
           example:
             message: CSRF token mismatch.
+
+    Forbidden:
+      description: The user does not have the Spatie permission this endpoint needs.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            message: User does not have the right permissions.
+
+    RoleNotFound:
+      description: No role with this ID, a non-numeric ID, or the `superadmin` role.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            message: Role not found.
 
     ValidationError:
       description: Request validation failed.
