@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.0.0
+  version: 1.1.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -17,8 +17,34 @@ info:
     3. Send the session cookie and the latest `X-CSRF-TOKEN` with every following
        `POST`, `PUT` and `PATCH` request (for example `POST /logout`, `PUT /roles/{id}`).
 
+    ## Response format
+    Every response written by the API controllers uses the same envelope:
+
+    ```json
+    // success
+    { "code": 200, "success": true,  "message": "List Data", "data": { } }
+    // error
+    { "code": 404, "success": false, "message": "Not Found", "errors": "Data Not Found" }
+    ```
+
+    `code` in the body is the same as the HTTP status code. `data` / `errors` change per
+    endpoint and are described below.
+
+    A few errors come from Laravel or Spatie directly and do **not** use the envelope; their
+    body is only `{ "message": "..." }`:
+
+    | Status | When | `message` |
+    |---|---|---|
+    | 401 | Not logged in / session expired | `Unauthenticated.` |
+    | 403 | Missing Spatie permission | `User does not have the right permissions.` |
+    | 419 | CSRF token missing or wrong | `CSRF token mismatch.` |
+    | 429 | More than 5 login attempts per minute | `Too Many Attempts.` |
+
+    When the server runs with `APP_DEBUG=true`, these framework errors also contain
+    `exception`, `file`, `line` and `trace`. Production must run with `APP_DEBUG=false`.
+
     ## Permissions
-    Role endpoints also need a Spatie permission, named
+    Role and user endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -26,6 +52,10 @@ info:
     The client origin must be listed in `SANCTUM_STATEFUL_DOMAINS`, otherwise the
     session endpoints return `400`. Browser clients must send requests with credentials
     (`withCredentials: true` / `credentials: "include"`).
+
+    ## Server requirement
+    The installed packages (Symfony 8.1) need **PHP 8.4 or newer**. On an older PHP every
+    request fails with a PHP parse error before reaching the API.
 
   contact:
     name: FinTrack360 API Support
@@ -43,6 +73,8 @@ tags:
     description: Company dashboard data
   - name: Roles
     description: User role management (Spatie permission)
+  - name: Users
+    description: User management
 
 paths:
   /csrf-token:
@@ -56,13 +88,26 @@ paths:
         `X-CSRF-TOKEN` header on `POST /login` and `POST /logout`.
       operationId: getCsrfToken
 
+      security: []
+
       responses:
         "200":
           description: CSRF token returned
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CsrfToken"
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CsrfToken"
+              example:
+                code: 200
+                success: true
+                message: CSRF token
+                data:
+                  csrf_token: MNO0IvZ2M6xxELP5CM9lYysT0RJL9d4wIKglPXA8
 
         "400":
           $ref: "#/components/responses/SessionUnavailable"
@@ -76,6 +121,8 @@ paths:
         Authenticates the user with the web session guard. Only users with
         status `Approved` can log in. Limited to 5 requests per minute.
       operationId: login
+
+      security: []
 
       parameters:
         - $ref: "#/components/parameters/CsrfHeader"
@@ -93,11 +140,11 @@ paths:
                 email:
                   type: string
                   format: email
-                  example: admin@example.com
+                  example: test.user@example.com
                 password:
                   type: string
                   format: password
-                  example: secret123
+                  example: Test@1234
                 remember:
                   type: boolean
                   description: Keep the user logged in ("remember me").
@@ -110,15 +157,18 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: Login successful.
-                  csrf_token:
-                    type: string
-                    description: New CSRF token to use for the following requests.
-                    example: kT3s9QwXv2mL8pR1aZ7cN4yB6hJ0dF5eG2uI9oP1
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CsrfToken"
+              example:
+                code: 200
+                success: true
+                message: Login successful.
+                data:
+                  csrf_token: kT3s9QwXv2mL8pR1aZ7cN4yB6hJ0dF5eG2uI9oP1
 
         "400":
           $ref: "#/components/responses/SessionUnavailable"
@@ -128,29 +178,49 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/ErrorEnvelope"
               example:
+                code: 401
+                success: false
                 message: Invalid email or password.
+                errors: null
 
         "403":
-          description: The account exists but its status is not `Approved`
+          description: |
+            The account exists but its status is not `Approved`. The session is reset, so use
+            the new `csrf_token` in `errors` for the next request.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: Your account is not active.
-                  csrf_token:
-                    type: string
-                    example: kT3s9QwXv2mL8pR1aZ7cN4yB6hJ0dF5eG2uI9oP1
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      errors:
+                        $ref: "#/components/schemas/CsrfToken"
+              example:
+                code: 403
+                success: false
+                message: Your account is not active.
+                errors:
+                  csrf_token: kT3s9QwXv2mL8pR1aZ7cN4yB6hJ0dF5eG2uI9oP1
 
         "419":
           $ref: "#/components/responses/CsrfMismatch"
 
         "422":
-          $ref: "#/components/responses/ValidationError"
+          description: Request validation failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The email must be a valid email address. "
+                errors:
+                  email:
+                    - The email must be a valid email address.
 
         "429":
           $ref: "#/components/responses/TooManyRequests"
@@ -175,14 +245,18 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: Logged out successfully.
-                  csrf_token:
-                    type: string
-                    example: kT3s9QwXv2mL8pR1aZ7cN4yB6hJ0dF5eG2uI9oP1
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CsrfToken"
+              example:
+                code: 200
+                success: true
+                message: Logged out successfully.
+                data:
+                  csrf_token: kT3s9QwXv2mL8pR1aZ7cN4yB6hJ0dF5eG2uI9oP1
 
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -198,7 +272,8 @@ paths:
       description: |
         Returns the details of the logged-in user, with the user's Spatie role and its
         permissions grouped as a tree (see `PermissionTree`). `role` is `null` when the
-        user has no role assigned.
+        user has no Spatie role assigned (for example users that only have an old
+        `user_roles` role); such users get `403` on every permission-protected endpoint.
       operationId: getCurrentUser
 
       security:
@@ -210,10 +285,57 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  user:
-                    $ref: "#/components/schemas/User"
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          user:
+                            $ref: "#/components/schemas/User"
+              examples:
+                withRole:
+                  summary: User with a Spatie role
+                  value:
+                    code: 200
+                    success: true
+                    message: Detail data
+                    data:
+                      user:
+                        id: 5
+                        name: Test User
+                        email: test.user@example.com
+                        role_id: 3
+                        role:
+                          name: Test Manager
+                          permissions:
+                            module:
+                              system-configuration:
+                                menu:
+                                  user-role:
+                                    permission: [view, create, edit, change-status]
+                                  user:
+                                    permission: [view]
+                        company_id: 1
+                        status: Approved
+                        email_verified_at: null
+                withoutRole:
+                  summary: User without a Spatie role
+                  value:
+                    code: 200
+                    success: true
+                    message: Detail data
+                    data:
+                      user:
+                        id: 6
+                        name: Test Sales User
+                        email: test.sales@example.com
+                        role_id: 8
+                        role: null
+                        company_id: 1
+                        status: Approved
+                        email_verified_at: null
 
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -234,7 +356,8 @@ paths:
         - `inventory_alert`: current stock per product, lowest quantity first.
 
         Amounts and quantities are returned as decimal strings (for example `"21754.0000"`).
-        Lists are not paginated.
+        The first entry of each `business_summary` sales/purchases/collection array is the
+        number `0`. Lists are not paginated.
 
         Super admin users (`role_id = 1`) get `403`.
       operationId: getDashboard
@@ -248,7 +371,68 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Dashboard"
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Dashboard"
+              example:
+                code: 200
+                success: true
+                message: Detail data
+                data:
+                  business_summary:
+                    dates: ["2026-11-01", "2026-11-01", "2026-11-02"]
+                    totalSales: [0, "7426.7500", "11080.0000"]
+                    totalPurchases: [0, "0.0000", "5890.0000"]
+                    totalCollection: [0, "10599.2500", "8775.0000"]
+                    totalAccountsReceivables: ["486391.5667", "-3240.0000", "2305.0000"]
+                    totalAccountsPayables: ["1457499.2185", "0.0000", "5890.0000"]
+                  sales_and_collection:
+                    dates: [Jan, Feb, Mar]
+                    sales: ["477766.5250", "428187.9000", "565990.3000"]
+                    collections: ["448329.7500", "493622.0650", "639015.9750"]
+                  top_products:
+                    - quantity: "322399.850000"
+                      total_price: "1184405.850000"
+                      sales_id: 1
+                      product_id: 10
+                      branch_id: 1
+                      store_id: 2
+                      id: 1
+                      company_id: 1
+                      product:
+                        id: 10
+                        name: Test Product A
+                  top_customers:
+                    - subtotal: "656447.000000"
+                      customer_id: 3
+                      customerName: Test Customer Ltd
+                  recent_transactions:
+                    - date: "2026-11-02"
+                      quantity: "5.000000"
+                      total_price: "6500.000000"
+                      product_id: 10
+                      type: sale
+                      product:
+                        id: 10
+                        name: Test Product A
+                    - date: "2026-11-01"
+                      quantity: "10.000000"
+                      total_price: "9000.000000"
+                      product_id: 11
+                      type: purchase
+                      product:
+                        id: 11
+                        name: Test Product B
+                  inventory_alert:
+                    - quantity: "2.000000"
+                      product_id: 11
+                      product:
+                        id: 11
+                        name: Test Product B
+                        low_stock: "5.000000"
 
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -258,9 +442,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/ErrorEnvelope"
               example:
+                code: 403
+                success: false
                 message: Development ongoing
+                errors: null
 
   /roles:
     get:
@@ -269,7 +456,8 @@ paths:
       summary: List roles
       description: |
         Paginated list of roles (guard `web`) with each role's permissions as a tree.
-        The `superadmin` role is never listed.
+        The `superadmin` role is never listed. The roles are in `data.list` and the
+        pagination info in `data.meta`.
 
         Required permission: `module:system-configuration.menu:user-role.permission:view`
       operationId: listRoles
@@ -283,7 +471,7 @@ paths:
           description: Filter by role name (partial match).
           schema:
             type: string
-          example: acc
+          example: test
         - name: status
           in: query
           description: Filter by status. Any other value is ignored.
@@ -325,14 +513,48 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  data:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Role"
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Role"
+                          meta:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  list:
+                    - id: 3
+                      name: Test Manager
+                      status: Active
+                      created_at: "2026-11-05T10:15:00.000000Z"
+                      permissions:
+                        module:
+                          system-configuration:
+                            menu:
+                              user-role:
+                                permission: [view, create, edit, change-status]
+                              user:
+                                permission: [view]
+                    - id: 4
+                      name: Test Viewer
+                      status: Inactive
+                      created_at: "2026-11-05T10:20:00.000000Z"
+                      permissions:
+                        module: {}
                   meta:
-                    $ref: "#/components/schemas/PaginationMeta"
+                    current_page: 1
+                    per_page: 10
+                    total: 2
+                    last_page: 1
 
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -369,13 +591,27 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: Role created successfully.
-                  data:
-                    $ref: "#/components/schemas/Role"
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Role"
+              example:
+                code: 201
+                success: true
+                message: Role created successfully.
+                data:
+                  id: 3
+                  name: Test Manager
+                  status: Active
+                  created_at: "2026-11-05T10:15:00.000000Z"
+                  permissions:
+                    module:
+                      system-configuration:
+                        menu:
+                          user:
+                            permission: [view]
 
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -387,7 +623,30 @@ paths:
           $ref: "#/components/responses/CsrfMismatch"
 
         "422":
-          $ref: "#/components/responses/ValidationError"
+          description: Request validation failed (for example missing, duplicate or `superadmin` name).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              examples:
+                missingName:
+                  summary: Name missing
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The name field is required. "
+                    errors:
+                      name:
+                        - The name field is required.
+                duplicateName:
+                  summary: Name already used
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The name has already been taken. "
+                    errors:
+                      name:
+                        - The name has already been taken.
 
   /roles/{id}:
     put:
@@ -422,13 +681,29 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: Role updated successfully.
-                  data:
-                    $ref: "#/components/schemas/Role"
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Role"
+              example:
+                code: 200
+                success: true
+                message: Role updated successfully.
+                data:
+                  id: 3
+                  name: Test Manager Updated
+                  status: Active
+                  created_at: "2026-11-05T10:15:00.000000Z"
+                  permissions:
+                    module:
+                      system-configuration:
+                        menu:
+                          user-role:
+                            permission: [view]
+                          user:
+                            permission: [view]
 
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -484,13 +759,23 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: Status updated successfully.
-                  data:
-                    $ref: "#/components/schemas/Role"
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Role"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 3
+                  name: Test Manager
+                  status: Inactive
+                  created_at: "2026-11-05T10:15:00.000000Z"
+                  permissions:
+                    module: {}
 
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -505,7 +790,134 @@ paths:
           $ref: "#/components/responses/CsrfMismatch"
 
         "422":
-          $ref: "#/components/responses/ValidationError"
+          description: Status is missing or not `Active` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+  /users:
+    get:
+      tags:
+        - Users
+      summary: List users
+      description: |
+        User list in the same DataTables format as the web user list
+        (`admin/usermanage-user-list`), but with plain values only (no HTML or action buttons).
+
+        - `role_id` holds the **role name**, not the numeric ID.
+        - `recordsTotal` is the count of all users; `recordsFiltered` is the count after `search[value]`.
+        - The list is **not** limited to the logged-in user's company.
+
+        Required permission: `module:system-configuration.menu:user.permission:view`
+      operationId: listUsers
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: start
+          in: query
+          description: Number of rows to skip (offset).
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: length
+          in: query
+          description: Number of rows to return.
+          schema:
+            type: integer
+            minimum: 1
+            default: 10
+        - name: search[value]
+          in: query
+          description: Partial match on id, role, name, email, phone and status.
+          schema:
+            type: string
+          example: test
+        - name: order[0][column]
+          in: query
+          description: |
+            Column index to sort by: `0` id, `1` id, `2` role_id, `3` name, `4` email,
+            `5` phone, `6` status. Unknown index falls back to `id`.
+          schema:
+            type: integer
+            default: 0
+        - name: order[0][dir]
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+        - name: draw
+          in: query
+          description: DataTables draw counter, returned as-is (`0` when not sent).
+          schema:
+            type: integer
+            default: 0
+
+      responses:
+        "200":
+          description: User list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          draw:
+                            type: integer
+                            example: 1
+                          recordsTotal:
+                            type: integer
+                            example: 8
+                          recordsFiltered:
+                            type: integer
+                            example: 2
+                          data:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/UserListItem"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  draw: 1
+                  recordsTotal: 8
+                  recordsFiltered: 2
+                  data:
+                    - id: 6
+                      role_id: Test Manager
+                      name: Test User Two
+                      email: test.user2@example.com
+                      phone: "01700000002"
+                      status: Inactive
+                    - id: 5
+                      role_id: Test Manager
+                      name: Test User
+                      email: test.user@example.com
+                      phone: "01700000001"
+                      status: Approved
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
 components:
   securitySchemes:
@@ -533,9 +945,80 @@ components:
       description: Role ID. The `superadmin` role, an unknown ID or a non-numeric ID returns `404`.
       schema:
         type: integer
-      example: 2
+      example: 3
 
   schemas:
+    SuccessEnvelope:
+      type: object
+      description: Wrapper used by every successful API response.
+      required: [code, success, message, data]
+      properties:
+        code:
+          type: integer
+          description: Same as the HTTP status code.
+          example: 200
+        success:
+          type: boolean
+          const: true
+          example: true
+        message:
+          type: string
+          example: List Data
+        data:
+          description: Endpoint-specific payload.
+
+    ErrorEnvelope:
+      type: object
+      description: Wrapper used by errors returned from the API controllers.
+      required: [code, success, message, errors]
+      properties:
+        code:
+          type: integer
+          description: Same as the HTTP status code.
+          example: 404
+        success:
+          type: boolean
+          const: false
+          example: false
+        message:
+          type: string
+          example: Not Found
+        errors:
+          description: Error details; `null`, a string or an object depending on the endpoint.
+          type: [object, string, "null"]
+
+    ValidationErrorEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/ErrorEnvelope"
+        - type: object
+          properties:
+            code:
+              example: 422
+            message:
+              type: string
+              description: "`Validation Failed. ` followed by the first message of every invalid field."
+              example: "Validation Failed. The name field is required. "
+            errors:
+              type: object
+              description: Field name to list of messages.
+              additionalProperties:
+                type: array
+                items:
+                  type: string
+              example:
+                name:
+                  - The name field is required.
+
+    FrameworkError:
+      type: object
+      description: |
+        Error written by Laravel or Spatie, not by the API controllers (no envelope).
+        With `APP_DEBUG=true` it also has `exception`, `file`, `line` and `trace`.
+      properties:
+        message:
+          type: string
+          example: Unauthenticated.
+
     CsrfToken:
       type: object
       properties:
@@ -543,41 +1026,35 @@ components:
           type: string
           example: kT3s9QwXv2mL8pR1aZ7cN4yB6hJ0dF5eG2uI9oP1
 
-    Error:
-      type: object
-      properties:
-        message:
-          type: string
-          example: The request could not be processed.
-
     User:
       type: object
       properties:
         id:
           type: integer
-          example: 2
+          example: 5
         name:
           type: string
-          example: Admin
+          example: Test User
         email:
           type: string
           format: email
-          example: admin@example.com
+          example: test.user@example.com
         role_id:
           type: integer
-          description: "`1` = super admin, `2` = company admin."
-          example: 2
+          description: "`1` = super admin, `2` = company admin, others = custom roles."
+          example: 3
         role:
           type: [object, "null"]
-          description: Spatie role of the user. `null` when no role is assigned.
+          description: Spatie role of the user. `null` when no Spatie role is assigned.
           properties:
             name:
               type: string
-              example: admin
+              example: Test Manager
             permissions:
               $ref: "#/components/schemas/PermissionTree"
         company_id:
           type: [integer, "null"]
+          description: "`0` for the super admin."
           example: 1
         status:
           type: string
@@ -586,6 +1063,30 @@ components:
           type: [string, "null"]
           format: date-time
           example: null
+
+    UserListItem:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 5
+        role_id:
+          type: string
+          description: Role **name** of the user (not the ID).
+          example: Test Manager
+        name:
+          type: string
+          example: Test User
+        email:
+          type: string
+          format: email
+          example: test.user@example.com
+        phone:
+          type: [string, "null"]
+          example: "01700000001"
+        status:
+          type: string
+          example: Approved
 
     Decimal:
       type: [string, number]
@@ -600,7 +1101,7 @@ components:
           example: 10
         name:
           type: string
-          example: Softener RT
+          example: Test Product A
 
     Dashboard:
       type: object
@@ -640,33 +1141,33 @@ components:
           items:
             type: string
             format: date
-          example: ["2026-10-01", "2026-10-01", "2026-10-02"]
+          example: ["2026-11-01", "2026-11-01", "2026-11-02"]
         totalSales:
           description: General sales + POS sales (`grand_total`).
           type: array
           items:
             $ref: "#/components/schemas/Decimal"
-          example: [0, "21754.0000", "18200.0000"]
+          example: [0, "7426.7500", "11080.0000"]
         totalPurchases:
           type: array
           items:
             $ref: "#/components/schemas/Decimal"
-          example: [0, "3900.0000", "0.0000"]
+          example: [0, "0.0000", "5890.0000"]
         totalCollection:
           type: array
           items:
             $ref: "#/components/schemas/Decimal"
-          example: [0, "24188.0000", "9500.0000"]
+          example: [0, "10599.2500", "8775.0000"]
         totalAccountsReceivables:
           type: array
           items:
             $ref: "#/components/schemas/Decimal"
-          example: ["468649.0165", "2066.0000", "-1200.0000"]
+          example: ["486391.5667", "-3240.0000", "2305.0000"]
         totalAccountsPayables:
           type: array
           items:
             $ref: "#/components/schemas/Decimal"
-          example: ["1531863.4825", "3900.0000", "0.0000"]
+          example: ["1457499.2185", "0.0000", "5890.0000"]
 
     SalesAndCollection:
       type: object
@@ -682,12 +1183,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Decimal"
-          example: ["477766.5250", "428187.9000", "0.0000"]
+          example: ["477766.5250", "428187.9000", "565990.3000"]
         collections:
           type: array
           items:
             $ref: "#/components/schemas/Decimal"
-          example: ["448329.7500", "493622.0650", "0.0000"]
+          example: ["448329.7500", "493622.0650", "639015.9750"]
 
     TopProduct:
       type: object
@@ -718,18 +1219,6 @@ components:
           example: 1
         product:
           $ref: "#/components/schemas/ProductRef"
-      example:
-        quantity: "312818.850000"
-        total_price: "1149449.850000"
-        sales_id: 1
-        product_id: 10
-        branch_id: 1
-        store_id: 2
-        id: 1
-        company_id: 1
-        product:
-          id: 10
-          name: Softener RT
 
     TopCustomer:
       type: object
@@ -738,14 +1227,10 @@ components:
           $ref: "#/components/schemas/Decimal"
         customer_id:
           type: [integer, "null"]
-          example: 1535
+          example: 3
         customerName:
           type: [string, "null"]
-          example: Global Trading Service Ltd
-      example:
-        subtotal: "656447.000000"
-        customer_id: 1535
-        customerName: Global Trading Service Ltd
+          example: Test Customer Ltd
 
     RecentTransaction:
       type: object
@@ -753,36 +1238,27 @@ components:
         date:
           type: string
           format: date
-          example: "2025-01-05"
+          example: "2026-11-02"
         type:
           type: string
           enum: [purchase, sale]
-          example: purchase
+          example: sale
         product_id:
           type: integer
-          example: 12
+          example: 10
         quantity:
           $ref: "#/components/schemas/Decimal"
         total_price:
           $ref: "#/components/schemas/Decimal"
         product:
           $ref: "#/components/schemas/ProductRef"
-      example:
-        date: "2025-01-05"
-        quantity: "550.000000"
-        total_price: "1006.500000"
-        product_id: 12
-        type: purchase
-        product:
-          id: 12
-          name: Fixing Agent DFA-600
 
     InventoryAlert:
       type: object
       properties:
         product_id:
           type: integer
-          example: 79
+          example: 11
         quantity:
           description: Current stock quantity.
           $ref: "#/components/schemas/Decimal"
@@ -791,36 +1267,13 @@ components:
           properties:
             id:
               type: integer
-              example: 79
+              example: 11
             name:
               type: string
-              example: Detergent SINOJAN-7L
+              example: Test Product B
             low_stock:
               description: Low-stock threshold set on the product.
               $ref: "#/components/schemas/Decimal"
-      example:
-        quantity: "0.000000"
-        product_id: 79
-        product:
-          id: 79
-          name: Detergent SINOJAN-7L
-          low_stock: "100.000000"
-
-    ValidationError:
-      type: object
-      properties:
-        message:
-          type: string
-          example: The email field is required.
-        errors:
-          type: object
-          additionalProperties:
-            type: array
-            items:
-              type: string
-          example:
-            email:
-              - The email field is required.
 
     PermissionTree:
       type: object
@@ -858,10 +1311,10 @@ components:
       properties:
         id:
           type: integer
-          example: 2
+          example: 3
         name:
           type: string
-          example: admin
+          example: Test Manager
         status:
           type: string
           enum: [Active, Inactive]
@@ -869,7 +1322,7 @@ components:
         created_at:
           type: [string, "null"]
           format: date-time
-          example: "2026-11-05T03:39:15.000000Z"
+          example: "2026-11-05T10:15:00.000000Z"
         permissions:
           $ref: "#/components/schemas/PermissionTree"
 
@@ -886,7 +1339,7 @@ components:
           minLength: 2
           maxLength: 55
           description: Must be unique among `web` roles and cannot be `superadmin`.
-          example: Accountant
+          example: Test Manager
         status:
           type: string
           enum: [Active, Inactive]
@@ -898,8 +1351,8 @@ components:
           items:
             type: string
           example:
-            - module:customer-manage.menu:customer.permission:view
-            - module:customer-manage.menu:customer.permission:create
+            - module:system-configuration.menu:user.permission:view
+            - module:system-configuration.menu:user-role.permission:view
 
     PaginationMeta:
       type: object
@@ -912,7 +1365,7 @@ components:
           example: 10
         total:
           type: integer
-          example: 1
+          example: 2
         last_page:
           type: integer
           example: 1
@@ -923,34 +1376,37 @@ components:
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/Error"
+            $ref: "#/components/schemas/ErrorEnvelope"
           example:
+            code: 400
+            success: false
             message: Session is not available for this origin. Check SANCTUM_STATEFUL_DOMAINS.
+            errors: null
 
     Unauthorized:
-      description: Not logged in or the session has expired.
+      description: Not logged in or the session has expired (Laravel response, no envelope).
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/Error"
+            $ref: "#/components/schemas/FrameworkError"
           example:
             message: Unauthenticated.
 
     CsrfMismatch:
-      description: CSRF token is missing, invalid or expired. Call `GET /csrf-token` again.
+      description: CSRF token is missing, invalid or expired. Call `GET /csrf-token` again (Laravel response, no envelope).
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/Error"
+            $ref: "#/components/schemas/FrameworkError"
           example:
             message: CSRF token mismatch.
 
     Forbidden:
-      description: The user does not have the Spatie permission this endpoint needs.
+      description: The user does not have the Spatie permission this endpoint needs (Spatie response, no envelope).
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/Error"
+            $ref: "#/components/schemas/FrameworkError"
           example:
             message: User does not have the right permissions.
 
@@ -959,22 +1415,32 @@ components:
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/Error"
+            $ref: "#/components/schemas/ErrorEnvelope"
           example:
-            message: Role not found.
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
 
     ValidationError:
       description: Request validation failed.
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/ValidationError"
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          example:
+            code: 422
+            success: false
+            message: "Validation Failed. The name field is required. "
+            errors:
+              name:
+                - The name field is required.
 
     TooManyRequests:
-      description: Too many login attempts. Limit is 5 requests per minute.
+      description: Too many login attempts. Limit is 5 requests per minute (Laravel response, no envelope).
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/Error"
+            $ref: "#/components/schemas/FrameworkError"
           example:
             message: Too Many Attempts.
