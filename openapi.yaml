@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.1.0
+  version: 1.2.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -15,7 +15,7 @@ info:
     2. Call `POST /login` with the `X-CSRF-TOKEN` header. On success the session cookie
        is authenticated and a new `csrf_token` is returned.
     3. Send the session cookie and the latest `X-CSRF-TOKEN` with every following
-       `POST`, `PUT` and `PATCH` request (for example `POST /logout`, `PUT /roles/{id}`).
+       `POST`, `PUT`, `PATCH` and `DELETE` request (for example `POST /logout`, `PUT /roles/{id}`).
 
     ## Response format
     Every response written by the API controllers uses the same envelope:
@@ -44,7 +44,7 @@ info:
     `exception`, `file`, `line` and `trace`. Production must run with `APP_DEBUG=false`.
 
     ## Permissions
-    Role and user endpoints also need a Spatie permission, named
+    Role and branch endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -73,8 +73,8 @@ tags:
     description: Company dashboard data
   - name: Roles
     description: User role management (Spatie permission)
-  - name: Users
-    description: User management
+  - name: Branches
+    description: Branch management (Settings → Branch)
 
 paths:
   /csrf-token:
@@ -803,71 +803,238 @@ paths:
                   status:
                     - The selected status is invalid.
 
-  /users:
+  /branches:
     get:
       tags:
-        - Users
-      summary: List users
+        - Branches
+      summary: List branches
       description: |
-        User list in the same DataTables format as the web user list
-        (`admin/usermanage-user-list`), but with plain values only (no HTML or action buttons).
+        All branches of the logged-in user's company (super admin: every company). Soft-deleted
+        branches are not listed. The list is **not** paginated and has no search or sort
+        parameters. No sort order is set (the database usually returns them by ID).
 
-        - `role_id` holds the **role name**, not the numeric ID.
-        - `recordsTotal` is the count of all users; `recordsFiltered` is the count after `search[value]`.
-        - The list is **not** limited to the logged-in user's company.
+        Required permission: `module:system-configuration.menu:branch.permission:view`
+      operationId: listBranches
 
-        Required permission: `module:system-configuration.menu:user.permission:view`
-      operationId: listUsers
+      security:
+        - sessionCookie: []
+
+      responses:
+        "200":
+          description: Branch list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Branch"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  - id: 1
+                    company_id: 1
+                    name: Test Branch Main
+                    email: main.branch@example.com
+                    phone: "01700000101"
+                    address: Test Road 1, Dhaka
+                    is_default: "Yes"
+                    status: Approved
+                    created_at: "2026-11-05T10:15:00.000000Z"
+                  - id: 2
+                    company_id: 1
+                    name: Test Branch Two
+                    email: second.branch@example.com
+                    phone: "01700000102"
+                    address: Test Road 2, Chattogram
+                    is_default: "NO"
+                    status: Approved
+                    created_at: "2026-11-05T10:20:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Branches
+      summary: Create branch
+      description: |
+        Creates a branch for the logged-in user's company. The validation rules are the same
+        as the web form (`admin/settings-branch-create`), read from the branch form settings.
+
+        - `status` is always saved as `Approved`, even if another value is sent.
+        - `phone` and `email` must be unique across **all** branches (every company, including
+          soft-deleted branches).
+        - Setting `is_default` to `Yes` does **not** change the old default branch to `NO`;
+          update the old one yourself so the company keeps exactly one default branch.
+
+        Required permission: `module:system-configuration.menu:branch.permission:create`
+      operationId: createBranch
 
       security:
         - sessionCookie: []
 
       parameters:
-        - name: start
-          in: query
-          description: Number of rows to skip (offset).
-          schema:
-            type: integer
-            minimum: 0
-            default: 0
-        - name: length
-          in: query
-          description: Number of rows to return.
-          schema:
-            type: integer
-            minimum: 1
-            default: 10
-        - name: search[value]
-          in: query
-          description: Partial match on id, role, name, email, phone and status.
-          schema:
-            type: string
-          example: test
-        - name: order[0][column]
-          in: query
-          description: |
-            Column index to sort by: `0` id, `1` id, `2` role_id, `3` name, `4` email,
-            `5` phone, `6` status. Unknown index falls back to `id`.
-          schema:
-            type: integer
-            default: 0
-        - name: order[0][dir]
-          in: query
-          description: Any value other than `asc` sorts descending.
-          schema:
-            type: string
-            enum: [asc, desc]
-            default: desc
-        - name: draw
-          in: query
-          description: DataTables draw counter, returned as-is (`0` when not sent).
-          schema:
-            type: integer
-            default: 0
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BranchRequest"
+
+      responses:
+        "201":
+          description: Branch created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Branch"
+              example:
+                code: 201
+                success: true
+                message: Branch created successfully.
+                data:
+                  id: 3
+                  company_id: 1
+                  name: Test Branch Three
+                  email: third.branch@example.com
+                  phone: "01700000103"
+                  address: Test Road 3, Sylhet
+                  is_default: "NO"
+                  status: Approved
+                  created_at: "2026-11-08T10:49:30.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/BranchValidationError"
+
+  /branches/{id}:
+    put:
+      tags:
+        - Branches
+      summary: Update branch
+      description: |
+        Updates a branch (API version of the web edit form `admin/settings-branch-edit/{id}`).
+        The validation rules are the same as the web form; the branch's own `phone` and `email`
+        may be kept.
+
+        **Send the full branch data.** Every field is set from the body, so a missing `email` or
+        `address` is saved as `null`.
+
+        - `status` is always saved as `Approved`, so updating an `Inactive` branch makes it active
+          again. Use `PATCH /branches/{id}/status` afterwards if needed.
+        - `company_id` is set to the logged-in user's company.
+        - Setting `is_default` to `Yes` does **not** change the old default branch to `NO`.
+
+        Required permission: `module:system-configuration.menu:branch.permission:edit`
+      operationId: updateBranch
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/BranchId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BranchRequest"
 
       responses:
         "200":
-          description: User list
+          description: Branch updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Branch"
+              example:
+                code: 200
+                success: true
+                message: Branch updated successfully.
+                data:
+                  id: 1
+                  company_id: 1
+                  name: Test Branch Main Updated
+                  email: main.branch@example.com
+                  phone: "01700000101"
+                  address: Test Road 10, Dhaka
+                  is_default: "Yes"
+                  status: Approved
+                  created_at: "2026-11-05T10:15:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/BranchNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/BranchValidationError"
+
+    delete:
+      tags:
+        - Branches
+      summary: Delete branch
+      description: |
+        Soft-deletes a branch (`deleted_at` is set; the row stays in the database).
+
+        The branch cannot be deleted (`409`) when:
+        - it is the default branch (`is_default = Yes`), or
+        - it is used by any store, stock summary, customer or supplier (`errors.used_in` lists which).
+
+        Other tables (sales, purchases, ledger, …) are not checked.
+
+        Required permission: `module:system-configuration.menu:branch.permission:delete`
+      operationId: deleteBranch
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/BranchId"
+
+      responses:
+        "200":
+          description: Branch deleted
           content:
             application/json:
               schema:
@@ -878,46 +1045,136 @@ paths:
                       data:
                         type: object
                         properties:
-                          draw:
+                          id:
                             type: integer
-                            example: 1
-                          recordsTotal:
-                            type: integer
-                            example: 8
-                          recordsFiltered:
-                            type: integer
-                            example: 2
-                          data:
-                            type: array
-                            items:
-                              $ref: "#/components/schemas/UserListItem"
+                            example: 3
               example:
                 code: 200
                 success: true
-                message: List Data
+                message: Branch deleted successfully.
                 data:
-                  draw: 1
-                  recordsTotal: 8
-                  recordsFiltered: 2
-                  data:
-                    - id: 6
-                      role_id: Test Manager
-                      name: Test User Two
-                      email: test.user2@example.com
-                      phone: "01700000002"
-                      status: Inactive
-                    - id: 5
-                      role_id: Test Manager
-                      name: Test User
-                      email: test.user@example.com
-                      phone: "01700000001"
-                      status: Approved
+                  id: 3
 
         "401":
           $ref: "#/components/responses/Unauthorized"
 
         "403":
           $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/BranchNotFound"
+
+        "409":
+          description: The branch is the default branch or is still in use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                defaultBranch:
+                  summary: Default branch
+                  value:
+                    code: 409
+                    success: false
+                    message: Default branch cannot be deleted.
+                    errors: null
+                inUse:
+                  summary: Branch in use
+                  value:
+                    code: 409
+                    success: false
+                    message: Branch is in use and cannot be deleted.
+                    errors:
+                      used_in: [stores, stock_summaries, customers]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /branches/{id}/status:
+    patch:
+      tags:
+        - Branches
+      summary: Change branch status
+      description: |
+        Sets the branch's status to `Approved` or `Inactive`. The default branch can also be set
+        to `Inactive`; transactions without a branch are still saved to the default branch.
+
+        Required permission: `module:system-configuration.menu:branch.permission:change-status`
+      operationId: updateBranchStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/BranchId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Branch"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 2
+                  company_id: 1
+                  name: Test Branch Two
+                  email: second.branch@example.com
+                  phone: "01700000102"
+                  address: Test Road 2, Chattogram
+                  is_default: "NO"
+                  status: Inactive
+                  created_at: "2026-11-05T10:20:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/BranchNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
 
 components:
   securitySchemes:
@@ -946,6 +1203,17 @@ components:
       schema:
         type: integer
       example: 3
+
+    BranchId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Branch ID. An unknown, soft-deleted or non-numeric ID, or a branch of another company
+        (for users other than the super admin), returns `404`.
+      schema:
+        type: integer
+      example: 2
 
   schemas:
     SuccessEnvelope:
@@ -1064,29 +1332,76 @@ components:
           format: date-time
           example: null
 
-    UserListItem:
+    Branch:
       type: object
       properties:
         id:
           type: integer
-          example: 5
-        role_id:
-          type: string
-          description: Role **name** of the user (not the ID).
-          example: Test Manager
+          example: 2
+        company_id:
+          type: integer
+          example: 1
         name:
-          type: string
-          example: Test User
+          type: [string, "null"]
+          example: Test Branch Two
         email:
-          type: string
+          type: [string, "null"]
           format: email
-          example: test.user@example.com
+          example: second.branch@example.com
         phone:
           type: [string, "null"]
-          example: "01700000001"
+          example: "01700000102"
+        address:
+          type: [string, "null"]
+          example: Test Road 2, Chattogram
+        is_default:
+          type: [string, "null"]
+          enum: ["Yes", "NO", null]
+          description: "`Yes` = the company's default branch, used when a transaction has no branch."
+          example: "NO"
         status:
           type: string
+          enum: [Approved, Inactive, Pending, Cancel]
           example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2026-11-05T10:20:00.000000Z"
+
+    BranchRequest:
+      type: object
+      description: |
+        Body for create and update. Rules come from the branch form settings (same as the web form).
+        `status` is not taken from the body; the branch is always saved as `Approved`.
+      required:
+        - name
+        - phone
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: Test Branch Three
+        phone:
+          type: string
+          description: |
+            Bangladeshi phone number (for example `01700000103`, `+8801700000103`).
+            Must be unique across all branches.
+          example: "01700000103"
+        email:
+          type: [string, "null"]
+          format: email
+          description: Must be unique across all branches.
+          example: third.branch@example.com
+        address:
+          type: [string, "null"]
+          maxLength: 200
+          example: Test Road 3, Sylhet
+        is_default:
+          type: [string, "null"]
+          enum: ["Yes", "NO", null]
+          description: "Missing or `null` is saved as `null` (not a default branch)."
+          example: "NO"
 
     Decimal:
       type: [string, number]
@@ -1421,6 +1736,55 @@ components:
             success: false
             message: Not Found
             errors: Data Not Found
+
+    BranchNotFound:
+      description: No branch with this ID, a non-numeric or soft-deleted ID, or a branch of another company.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    BranchValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingFields:
+              summary: Name and phone missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. The phone field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+                  phone:
+                    - The phone field is required.
+            duplicatePhone:
+              summary: Phone already used by another branch
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The phone has already been taken. "
+                errors:
+                  phone:
+                    - The phone has already been taken.
+            invalidDefault:
+              summary: is_default is not Yes / NO
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected is default is invalid. "
+                errors:
+                  is_default:
+                    - The selected is default is invalid.
 
     ValidationError:
       description: Request validation failed.
