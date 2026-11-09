@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.6.0
+  version: 1.7.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -44,8 +44,8 @@ info:
     `exception`, `file`, `line` and `trace`. Production must run with `APP_DEBUG=false`.
 
     ## Permissions
-    Role, branch, store, division, department, customer group, supplier group, unit, product type,
-    bank account and account type endpoints also need a Spatie permission, named
+    Role, branch, store, division, district, department, customer group, supplier group, unit,
+    product type, bank account and account type endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -80,6 +80,8 @@ tags:
     description: Store management (Settings → Store)
   - name: Divisions
     description: Division management (Settings → Division)
+  - name: Districts
+    description: District management (Settings → District)
   - name: Departments
     description: Department management (Settings → Department)
   - name: Customer Groups
@@ -2106,6 +2108,494 @@ paths:
 
         "404":
           $ref: "#/components/responses/DivisionNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+  /districts:
+    get:
+      tags:
+        - Districts
+      summary: List districts
+      description: |
+        Paginated list of districts (API version of the web list `admin/district-list`).
+        Districts are not filtered by company (same as the web list). Soft-deleted districts
+        are not listed. Each district includes its division (`division`). The districts are in
+        `data.items` and the pagination info in `data.pagination`.
+
+        Required permission: `module:system-configuration.menu:district.permission:view`
+      operationId: listDistricts
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name, Bangla name, URL or status.
+          schema:
+            type: string
+          example: Comilla
+        - name: division_id
+          in: query
+          description: Only the districts of this division. A non-numeric value is ignored.
+          schema:
+            type: integer
+          example: 6
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: District list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/District"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 1
+                      company_id: 1
+                      division_id: 1
+                      division:
+                        id: 1
+                        name: Chattagram
+                      name: Comilla
+                      bn_name: কুমিল্লা
+                      lat: "23.4682747"
+                      lon: "91.1788135"
+                      url: www.comilla.gov.bd
+                      status: Approved
+                      created_at: "2025-01-18T10:02:08.000000Z"
+                    - id: 2
+                      company_id: 1
+                      division_id: 1
+                      division:
+                        id: 1
+                        name: Chattagram
+                      name: Feni
+                      bn_name: ফেনী
+                      lat: "23.023231"
+                      lon: "91.3840844"
+                      url: www.feni.gov.bd
+                      status: Approved
+                      created_at: "2025-01-18T10:02:08.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 64
+                    last_page: 7
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Districts
+      summary: Create district
+      description: |
+        Creates a district (API version of the web form `admin/district-create`). The
+        validation rules are the same as the web form, read from the district form settings, plus:
+
+        - `division_id` must be an existing (not soft-deleted) division.
+        - `name` must be unique across all districts, whatever the division (not
+          case-sensitive). Soft-deleted districts are not counted.
+        - `bn_name` may be at most 100 characters; `lat`, `lon` and `url` at most 255.
+
+        `url` must be a full URL with a scheme (`https://comilla.gov.bd`); `www.comilla.gov.bd`
+        is rejected. `status` is always saved as `Approved` and `company_id` is set to the
+        logged-in user's company, even if other values are sent.
+
+        Required permission: `module:system-configuration.menu:district.permission:create`
+      operationId: createDistrict
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DistrictRequest"
+
+      responses:
+        "201":
+          description: District created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/District"
+              example:
+                code: 201
+                success: true
+                message: District created successfully.
+                data:
+                  id: 65
+                  company_id: 1
+                  division_id: 6
+                  division:
+                    id: 6
+                    name: Dhaka
+                  name: Api District
+                  bn_name: null
+                  lat: "23.81"
+                  lon: "90.41"
+                  url: https://api.gov.bd
+                  status: Approved
+                  created_at: "2026-11-09T10:41:52.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/DistrictValidationError"
+
+  /districts/{id}:
+    put:
+      tags:
+        - Districts
+      summary: Update district
+      description: |
+        Updates a district (API version of the web edit form `admin/district-edit/{id}`).
+        This is a **partial update**: only the fields in the body are validated and changed;
+        every field that is not sent keeps its current value. Sending `bn_name`, `lat`, `lon`
+        or `url` as `null` clears it.
+
+        - `status` is changed only when sent (`Approved`, `Inactive`, `Pending` or `Cancel`);
+          otherwise the district keeps its current status.
+        - `division_id` must be an existing (not soft-deleted) division.
+        - `name` must be unique across all districts (not case-sensitive); the district's own
+          name may be kept.
+        - `url` is checked only when sent, so a district with an older `www…` URL can still be
+          changed without sending `url`.
+        - `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:system-configuration.menu:district.permission:edit`
+      operationId: updateDistrict
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/DistrictId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: All fields are optional; send only what should change.
+              properties:
+                division_id:
+                  type: integer
+                  description: Existing (not soft-deleted) division.
+                  example: 7
+                name:
+                  type: string
+                  minLength: 2
+                  maxLength: 100
+                  example: Api District 2
+                bn_name:
+                  type: [string, "null"]
+                  maxLength: 100
+                  example: এপিআই জেলা
+                lat:
+                  type: [string, "null"]
+                  maxLength: 255
+                  example: "24.00"
+                lon:
+                  type: [string, "null"]
+                  maxLength: 255
+                  example: "90.41"
+                url:
+                  type: [string, "null"]
+                  format: uri
+                  maxLength: 255
+                  example: https://api.gov.bd
+                status:
+                  type: string
+                  enum: [Approved, Inactive, Pending, Cancel]
+                  example: Pending
+            examples:
+              latOnly:
+                summary: Change only the latitude
+                value:
+                  lat: "24.00"
+              moveAndRename:
+                summary: Move to another division, rename and change status
+                value:
+                  name: Api District 2
+                  division_id: 7
+                  status: Pending
+              clearUrl:
+                summary: Clear the URL
+                value:
+                  url: null
+
+      responses:
+        "200":
+          description: District updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/District"
+              example:
+                code: 200
+                success: true
+                message: District updated successfully.
+                data:
+                  id: 65
+                  company_id: 1
+                  division_id: 7
+                  division:
+                    id: 7
+                    name: Rangpur
+                  name: Api District 2
+                  bn_name: null
+                  lat: "24.00"
+                  lon: "90.41"
+                  url: https://api.gov.bd
+                  status: Pending
+                  created_at: "2026-11-09T10:41:52.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/DistrictNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/DistrictValidationError"
+
+    delete:
+      tags:
+        - Districts
+      summary: Delete district
+      description: |
+        Soft-deletes a district (`deleted_at` is set; the row stays in the database). A deleted
+        district is no longer listed, returns `404` on every other endpoint, and its name can be
+        used again.
+
+        The district cannot be deleted (`409`) when it is used by any upazila, customer or
+        supplier (`errors.used_in` lists which tables). The web deletes without this check; the
+        API blocks the delete on the server.
+
+        Required permission: `module:system-configuration.menu:district.permission:delete`
+      operationId: deleteDistrict
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/DistrictId"
+
+      responses:
+        "200":
+          description: District deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 65
+              example:
+                code: 200
+                success: true
+                message: District deleted successfully.
+                data:
+                  id: 65
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/DistrictNotFound"
+
+        "409":
+          description: The district is still in use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: District is in use and cannot be deleted.
+                errors:
+                  used_in: [upazilas]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /districts/{id}/status:
+    patch:
+      tags:
+        - Districts
+      summary: Change district status
+      description: |
+        Sets the district's status to `Approved` or `Inactive`.
+
+        Required permission: `module:system-configuration.menu:district.permission:change-status`
+      operationId: updateDistrictStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/DistrictId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/District"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 65
+                  company_id: 1
+                  division_id: 6
+                  division:
+                    id: 6
+                    name: Dhaka
+                  name: Api District
+                  bn_name: null
+                  lat: "23.81"
+                  lon: "90.41"
+                  url: https://api.gov.bd
+                  status: Inactive
+                  created_at: "2026-11-09T10:41:52.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/DistrictNotFound"
 
         "419":
           $ref: "#/components/responses/CsrfMismatch"
@@ -4835,6 +5325,17 @@ components:
         type: integer
       example: 9
 
+    DistrictId:
+      name: id
+      in: path
+      required: true
+      description: |
+        District ID. An unknown, soft-deleted or non-numeric ID returns `404`. Districts are not
+        filtered by company.
+      schema:
+        type: integer
+      example: 65
+
     DepartmentId:
       name: id
       in: path
@@ -5248,6 +5749,95 @@ components:
           maxLength: 255
           description: Full URL with a scheme (`https://…`).
           example: https://test.gov.bd
+
+    District:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        company_id:
+          type: integer
+          example: 1
+        division_id:
+          type: integer
+          example: 1
+        division:
+          type: [object, "null"]
+          description: The district's division (`null` if the division was deleted).
+          properties:
+            id:
+              type: integer
+              example: 1
+            name:
+              type: [string, "null"]
+              example: Chattagram
+        name:
+          type: [string, "null"]
+          example: Comilla
+        bn_name:
+          type: [string, "null"]
+          description: Name in Bangla.
+          example: কুমিল্লা
+        lat:
+          type: [string, "null"]
+          description: Latitude (stored as text).
+          example: "23.4682747"
+        lon:
+          type: [string, "null"]
+          description: Longitude (stored as text).
+          example: "91.1788135"
+        url:
+          type: [string, "null"]
+          description: Website. Older rows may hold a URL without a scheme (`www.comilla.gov.bd`).
+          example: www.comilla.gov.bd
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2025-01-18T10:02:08.000000Z"
+
+    DistrictRequest:
+      type: object
+      description: |
+        Body for create. Rules come from the district form settings (same as the web form), plus
+        an existing division and a unique name. `status` is not taken from the body; the district
+        is always saved as `Approved`.
+      required:
+        - division_id
+        - name
+      properties:
+        division_id:
+          type: integer
+          description: Existing (not soft-deleted) division.
+          example: 6
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          description: Unique across all districts, whatever the division (not case-sensitive; soft-deleted ones not counted).
+          example: Api District
+        bn_name:
+          type: [string, "null"]
+          maxLength: 100
+          example: এপিআই জেলা
+        lat:
+          type: [string, "null"]
+          maxLength: 255
+          example: "23.81"
+        lon:
+          type: [string, "null"]
+          maxLength: 255
+          example: "90.41"
+        url:
+          type: [string, "null"]
+          format: uri
+          maxLength: 255
+          description: Full URL with a scheme (`https://…`).
+          example: https://api.gov.bd
 
     Department:
       type: object
@@ -5943,6 +6533,55 @@ components:
                 success: false
                 message: "Validation Failed. The url must be a valid URL. "
                 errors:
+                  url:
+                    - The url must be a valid URL.
+            invalidStatus:
+              summary: Update only — status not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    DistrictNotFound:
+      description: No district with this ID, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    DistrictValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            duplicateName:
+              summary: Name already used by another district (any division)
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken. "
+                errors:
+                  name:
+                    - The name has already been taken.
+            invalidDivisionAndUrl:
+              summary: Unknown division and URL without a scheme
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected division id is invalid. The url must be a valid URL. "
+                errors:
+                  division_id:
+                    - The selected division id is invalid.
                   url:
                     - The url must be a valid URL.
             invalidStatus:
