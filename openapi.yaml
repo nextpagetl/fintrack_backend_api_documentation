@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.7.0
+  version: 1.8.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -45,7 +45,7 @@ info:
 
     ## Permissions
     Role, branch, store, division, district, department, customer group, supplier group, unit,
-    product type, bank account and account type endpoints also need a Spatie permission, named
+    brand, product type, bank account and account type endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -90,6 +90,8 @@ tags:
     description: Supplier group management (Supplier Manage → Supplier Group)
   - name: Units
     description: Product unit management (Product Manage → Unit)
+  - name: Brands
+    description: Brand management (Product Manage → Brand)
   - name: Product Types
     description: Product type management (Product Manage → Product Type)
   - name: Bank Accounts
@@ -4219,6 +4221,419 @@ paths:
                   status:
                     - The selected status is invalid.
 
+  /brands:
+    get:
+      tags:
+        - Brands
+      summary: List brands
+      description: |
+        Paginated list of brands (API version of the web list `admin/inventory-setup-brand-list`).
+        Brands are not filtered by company (unlike the web list, which shows only the logged-in
+        user's company). Soft-deleted brands are not listed. The brands are in `data.items` and
+        the pagination info in `data.pagination`.
+
+        Required permission: `module:product-manage.menu:brand.permission:view`
+      operationId: listBrands
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name or status.
+          schema:
+            type: string
+          example: RM
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Brand list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Brand"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 1
+                      company_id: 1
+                      name: Brand1
+                      status: Approved
+                      created_at: "2025-01-18T10:02:06.000000Z"
+                    - id: 2
+                      company_id: 1
+                      name: Brand2
+                      status: Approved
+                      created_at: "2025-01-18T10:02:06.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 2
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Brands
+      summary: Create brand
+      description: |
+        Creates a brand (API version of the web form `admin/inventory-setup-brand-create`). The
+        validation rules are the same as the web form, read from the brand form settings, with
+        two changes:
+
+        - `name` must be unique among brands that are not soft-deleted (not case-sensitive), of
+          any company. The web form also counts soft-deleted brands.
+        - `name` may be at most 100 characters (the size of the database column).
+
+        `status` is always saved as `Approved` and `company_id` is set to the logged-in user's
+        company, even if other values are sent.
+
+        Required permission: `module:product-manage.menu:brand.permission:create`
+      operationId: createBrand
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  $ref: "#/components/schemas/BrandName"
+
+      responses:
+        "201":
+          description: Brand created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Brand"
+              example:
+                code: 201
+                success: true
+                message: Brand created successfully.
+                data:
+                  id: 6
+                  company_id: 1
+                  name: Api Brand
+                  status: Approved
+                  created_at: "2026-11-09T10:57:20.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/BrandValidationError"
+
+  /brands/{id}:
+    put:
+      tags:
+        - Brands
+      summary: Update brand
+      description: |
+        Updates a brand (API version of the web edit form `admin/inventory-setup-brand-edit/{id}`).
+        This is a **partial update**: `name` and `status` are both optional, and a field that is
+        not sent keeps its current value.
+
+        - `status` is changed only when sent (`Approved`, `Inactive`, `Pending` or `Cancel`);
+          otherwise the brand keeps its current status.
+        - `name` must be unique among brands that are not soft-deleted (not case-sensitive);
+          the brand's own name may be kept.
+        - `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:product-manage.menu:brand.permission:edit`
+      operationId: updateBrand
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/BrandId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: All fields are optional; send only what should change.
+              properties:
+                name:
+                  $ref: "#/components/schemas/BrandName"
+                status:
+                  type: string
+                  enum: [Approved, Inactive, Pending, Cancel]
+                  example: Pending
+            examples:
+              nameOnly:
+                summary: Rename only
+                value:
+                  name: Api Brand 2
+              statusOnly:
+                summary: Change only the status
+                value:
+                  status: Pending
+
+      responses:
+        "200":
+          description: Brand updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Brand"
+              example:
+                code: 200
+                success: true
+                message: Brand updated successfully.
+                data:
+                  id: 6
+                  company_id: 1
+                  name: Api Brand 2
+                  status: Pending
+                  created_at: "2026-11-09T10:57:20.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/BrandNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/BrandValidationError"
+
+    delete:
+      tags:
+        - Brands
+      summary: Delete brand
+      description: |
+        Soft-deletes a brand (`deleted_at` is set; the row stays in the database). A deleted
+        brand is no longer listed, returns `404` on every other endpoint, and its name can be
+        used again through the API.
+
+        The brand cannot be deleted (`409`) when it is used by any product (soft-deleted
+        products are not counted) or stock summary (`errors.used_in` lists which). The web list
+        only hides the delete button for brands used by products; the API blocks the delete on
+        the server.
+
+        Required permission: `module:product-manage.menu:brand.permission:delete`
+      operationId: deleteBrand
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/BrandId"
+
+      responses:
+        "200":
+          description: Brand deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 6
+              example:
+                code: 200
+                success: true
+                message: Brand deleted successfully.
+                data:
+                  id: 6
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/BrandNotFound"
+
+        "409":
+          description: The brand is still in use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Brand is in use and cannot be deleted.
+                errors:
+                  used_in: [products, stock_summaries]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /brands/{id}/status:
+    patch:
+      tags:
+        - Brands
+      summary: Change brand status
+      description: |
+        Sets the brand's status to `Approved` or `Inactive`.
+
+        Required permission: `module:product-manage.menu:brand.permission:change-status`
+      operationId: updateBrandStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/BrandId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Brand"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 6
+                  company_id: 1
+                  name: Api Brand
+                  status: Inactive
+                  created_at: "2026-11-09T10:57:20.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/BrandNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
   /product-types:
     get:
       tags:
@@ -5369,6 +5784,17 @@ components:
         type: integer
       example: 2
 
+    BrandId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Brand ID. An unknown, soft-deleted or non-numeric ID returns `404`. Brands are not
+        filtered by company.
+      schema:
+        type: integer
+      example: 6
+
     UnitId:
       name: id
       in: path
@@ -5968,6 +6394,37 @@ components:
         limit (the size of the database column). Must be unique within the logged-in user's
         company (not case-sensitive, soft-deleted units not counted).
       example: PCS
+
+    Brand:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        company_id:
+          type: integer
+          example: 1
+        name:
+          type: [string, "null"]
+          example: Brand1
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2025-01-18T10:02:06.000000Z"
+
+    BrandName:
+      type: string
+      minLength: 2
+      maxLength: 100
+      description: |
+        Rules come from the brand form settings (same as the web form), plus a 100-character
+        limit (the size of the database column). Must be unique among brands that are not
+        soft-deleted, of any company (not case-sensitive).
+      example: Api Brand
 
     ProductType:
       type: object
@@ -6774,6 +7231,53 @@ components:
                     - The name has already been taken.
             invalidStatus:
               summary: Update only — status missing or not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    BrandNotFound:
+      description: No brand with this ID, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    BrandValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            shortName:
+              summary: Name shorter than 2 characters
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name must be at least 2 characters. "
+                errors:
+                  name:
+                    - The name must be at least 2 characters.
+            duplicateName:
+              summary: Name already used by another brand
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken. "
+                errors:
+                  name:
+                    - The name has already been taken.
+            invalidStatus:
+              summary: Update only — status not Approved / Inactive / Pending / Cancel
               value:
                 code: 422
                 success: false
