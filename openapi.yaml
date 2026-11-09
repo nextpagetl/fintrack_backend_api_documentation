@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.2.0
+  version: 1.3.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -44,7 +44,7 @@ info:
     `exception`, `file`, `line` and `trace`. Production must run with `APP_DEBUG=false`.
 
     ## Permissions
-    Role and branch endpoints also need a Spatie permission, named
+    Role, branch and department endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -75,6 +75,8 @@ tags:
     description: User role management (Spatie permission)
   - name: Branches
     description: Branch management (Settings → Branch)
+  - name: Departments
+    description: Department management (Settings → Department)
 
 paths:
   /csrf-token:
@@ -1176,6 +1178,408 @@ paths:
                   status:
                     - The selected status is invalid.
 
+  /departments:
+    get:
+      tags:
+        - Departments
+      summary: List departments
+      description: |
+        Paginated list of the logged-in user's company departments (the same company filter as the
+        web list `admin/settings-department-list`; this also applies to the super admin).
+        Soft-deleted departments are not listed. The departments are in `data.items` and the
+        pagination info in `data.pagination`.
+
+        Required permission: `module:system-configuration.menu:department.permission:view`
+      operationId: listDepartments
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name or status.
+          schema:
+            type: string
+          example: acc
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Department list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Department"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 2
+                      company_id: 1
+                      name: Test Accounts
+                      status: Approved
+                      created_at: "2026-11-09T10:20:00.000000Z"
+                    - id: 1
+                      company_id: 1
+                      name: Test HR
+                      status: Inactive
+                      created_at: "2026-11-09T10:15:00.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 2
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Departments
+      summary: Create department
+      description: |
+        Creates a department for the logged-in user's company. The validation rules are the same
+        as the web form (`admin/settings-department-create`), read from the department form
+        settings, plus a unique name check.
+
+        - `status` is always saved as `Approved`, even if another value is sent.
+        - `name` must be unique within the logged-in user's company (not case-sensitive).
+          Soft-deleted departments and other companies' departments are not counted.
+          The web form does **not** have this check.
+
+        Required permission: `module:system-configuration.menu:department.permission:create`
+      operationId: createDepartment
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  $ref: "#/components/schemas/DepartmentName"
+
+      responses:
+        "201":
+          description: Department created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Department"
+              example:
+                code: 201
+                success: true
+                message: Department created successfully.
+                data:
+                  id: 3
+                  company_id: 1
+                  name: Test Store
+                  status: Approved
+                  created_at: "2026-11-09T10:30:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/DepartmentValidationError"
+
+  /departments/{id}:
+    put:
+      tags:
+        - Departments
+      summary: Update department
+      description: |
+        Updates a department's name and status (API version of the web edit form
+        `admin/settings-department-edit/{id}`). The validation rules are the same as the web form,
+        plus a unique name check and a required status.
+
+        - `name` must be unique within the logged-in user's company (not case-sensitive); the
+          department's own name may be kept.
+        - `status` is taken from the body (`Approved`, `Inactive` or `Pending`).
+        - `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:system-configuration.menu:department.permission:edit`
+      operationId: updateDepartment
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/DepartmentId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - status
+              properties:
+                name:
+                  $ref: "#/components/schemas/DepartmentName"
+                status:
+                  type: string
+                  enum: [Approved, Inactive, Pending]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Department updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Department"
+              example:
+                code: 200
+                success: true
+                message: Department updated successfully.
+                data:
+                  id: 1
+                  company_id: 1
+                  name: Test Human Resource
+                  status: Inactive
+                  created_at: "2026-11-09T10:15:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/DepartmentNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/DepartmentValidationError"
+
+    delete:
+      tags:
+        - Departments
+      summary: Delete department
+      description: |
+        Soft-deletes a department (`deleted_at` is set; the row stays in the database). A deleted
+        department is no longer listed, returns `404` on every other endpoint, and its name can be
+        used again.
+
+        The department cannot be deleted (`409`) when it is used by any purchase requisition
+        (`errors.used_in` lists which). Other tables are not checked. The web delete button does
+        **not** have this check.
+
+        Required permission: `module:system-configuration.menu:department.permission:delete`
+      operationId: deleteDepartment
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/DepartmentId"
+
+      responses:
+        "200":
+          description: Department deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 3
+              example:
+                code: 200
+                success: true
+                message: Department deleted successfully.
+                data:
+                  id: 3
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/DepartmentNotFound"
+
+        "409":
+          description: The department is still in use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Department is in use and cannot be deleted.
+                errors:
+                  used_in: [purchase_requisitions]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /departments/{id}/status:
+    patch:
+      tags:
+        - Departments
+      summary: Change department status
+      description: |
+        Sets the department's status to `Approved` or `Inactive`.
+
+        Required permission: `module:system-configuration.menu:department.permission:change-status`
+      operationId: updateDepartmentStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/DepartmentId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Department"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 2
+                  company_id: 1
+                  name: Test Accounts
+                  status: Inactive
+                  created_at: "2026-11-09T10:20:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/DepartmentNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
 components:
   securitySchemes:
     sessionCookie:
@@ -1211,6 +1615,17 @@ components:
       description: |
         Branch ID. An unknown, soft-deleted or non-numeric ID, or a branch of another company
         (for users other than the super admin), returns `404`.
+      schema:
+        type: integer
+      example: 2
+
+    DepartmentId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Department ID. An unknown, soft-deleted or non-numeric ID returns `404`. Departments of
+        other companies are not blocked.
       schema:
         type: integer
       example: 2
@@ -1402,6 +1817,40 @@ components:
           enum: ["Yes", "NO", null]
           description: "Missing or `null` is saved as `null` (not a default branch)."
           example: "NO"
+
+    Department:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 2
+        company_id:
+          type: integer
+          description: "`0` for departments created by the super admin."
+          example: 1
+        name:
+          type: [string, "null"]
+          example: Test Accounts
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2026-11-09T10:20:00.000000Z"
+
+    DepartmentName:
+      type: string
+      minLength: 2
+      maxLength: 100
+      description: |
+        Rules come from the department form settings (same as the web form). Must be unique within
+        the logged-in user's company (not case-sensitive, soft-deleted departments not counted).
+
+        The database column holds only **55** characters: a longer name (56–100) passes validation
+        but is saved cut to 55 characters.
+      example: Test Store
 
     Decimal:
       type: [string, number]
@@ -1785,6 +2234,53 @@ components:
                 errors:
                   is_default:
                     - The selected is default is invalid.
+
+    DepartmentNotFound:
+      description: No department with this ID, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    DepartmentValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingName:
+              summary: Name missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+            duplicateName:
+              summary: Name already used by another department of the company
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken. "
+                errors:
+                  name:
+                    - The name has already been taken.
+            invalidStatus:
+              summary: Update only — status missing or not Approved / Inactive / Pending
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
 
     ValidationError:
       description: Request validation failed.
