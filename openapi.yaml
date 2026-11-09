@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.3.0
+  version: 1.4.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -44,7 +44,8 @@ info:
     `exception`, `file`, `line` and `trace`. Production must run with `APP_DEBUG=false`.
 
     ## Permissions
-    Role, branch and department endpoints also need a Spatie permission, named
+    Role, branch, department, customer group, supplier group, unit and product type endpoints
+    also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -77,6 +78,14 @@ tags:
     description: Branch management (Settings → Branch)
   - name: Departments
     description: Department management (Settings → Department)
+  - name: Customer Groups
+    description: Customer group management (Customer Manage → Customer Group)
+  - name: Supplier Groups
+    description: Supplier group management (Supplier Manage → Supplier Group)
+  - name: Units
+    description: Product unit management (Product Manage → Unit)
+  - name: Product Types
+    description: Product type management (Product Manage → Product Type)
 
 paths:
   /csrf-token:
@@ -1580,6 +1589,1616 @@ paths:
                   status:
                     - The selected status is invalid.
 
+  /customer-groups:
+    get:
+      tags:
+        - Customer Groups
+      summary: List customer groups
+      description: |
+        Paginated list of the logged-in user's company customer groups (the same company filter as the
+        web list `admin/sales-setup-customer-group-list`; this also applies to the super admin).
+        Soft-deleted customer groups are not listed. The customer groups are in `data.items` and the
+        pagination info in `data.pagination`.
+
+        Required permission: `module:customer-manage.menu:customer-group.permission:view`
+      operationId: listCustomerGroups
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name or status.
+          schema:
+            type: string
+          example: Wholesale
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Customer group list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/CustomerGroup"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 2
+                      company_id: 1
+                      name: Wholesale
+                      status: Approved
+                      created_at: "2026-11-09T10:20:00.000000Z"
+                    - id: 1
+                      company_id: 1
+                      name: Retail
+                      status: Inactive
+                      created_at: "2026-11-09T10:15:00.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 2
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Customer Groups
+      summary: Create customer group
+      description: |
+        Creates a customer group for the logged-in user's company. The validation rules are the same
+        as the web form (`admin/sales-setup-customer-group-create`), read from the customer group form settings, plus a unique
+        name check.
+
+        - `status` is always saved as `Approved`, even if another value is sent.
+        - `name` must be unique within the logged-in user's company (not case-sensitive).
+          Soft-deleted customer groups and other companies' customer groups are not counted.
+
+        Required permission: `module:customer-manage.menu:customer-group.permission:create`
+      operationId: createCustomerGroup
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  $ref: "#/components/schemas/CustomerGroupName"
+
+      responses:
+        "201":
+          description: Customer group created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CustomerGroup"
+              example:
+                code: 201
+                success: true
+                message: Customer group created successfully.
+                data:
+                  id: 3
+                  company_id: 1
+                  name: Wholesale Partner
+                  status: Approved
+                  created_at: "2026-11-09T10:30:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/CustomerGroupValidationError"
+
+  /customer-groups/{id}:
+    put:
+      tags:
+        - Customer Groups
+      summary: Update customer group
+      description: |
+        Updates a customer group's name and status (API version of the web edit form
+        `admin/sales-setup-customer-group-edit/{id}`). The validation rules are the same as the web form,
+        plus a unique name check and a required status.
+
+        - `name` must be unique within the logged-in user's company (not case-sensitive); the
+          customer group's own name may be kept.
+        - `status` is taken from the body (`Approved`, `Inactive`, `Pending` or `Cancel`).
+        - `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:customer-manage.menu:customer-group.permission:edit`
+      operationId: updateCustomerGroup
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CustomerGroupId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - status
+              properties:
+                name:
+                  $ref: "#/components/schemas/CustomerGroupName"
+                status:
+                  type: string
+                  enum: [Approved, Inactive, Pending, Cancel]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Customer group updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CustomerGroup"
+              example:
+                code: 200
+                success: true
+                message: Customer group updated successfully.
+                data:
+                  id: 1
+                  company_id: 1
+                  name: Wholesale Partner
+                  status: Inactive
+                  created_at: "2026-11-09T10:15:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/CustomerGroupNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/CustomerGroupValidationError"
+
+    delete:
+      tags:
+        - Customer Groups
+      summary: Delete customer group
+      description: |
+        Soft-deletes a customer group (`deleted_at` is set; the row stays in the database). A deleted
+        customer group is no longer listed, returns `404` on every other endpoint, and its name can be
+        used again.
+
+        The customer group cannot be deleted (`409`) when it is used by any of the customers
+        (`customers.customer_type`; soft-deleted customers are not counted). The web list uses the same check
+        to hide the delete button; the API blocks the delete on the server.
+
+        Required permission: `module:customer-manage.menu:customer-group.permission:delete`
+      operationId: deleteCustomerGroup
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CustomerGroupId"
+
+      responses:
+        "200":
+          description: Customer group deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 3
+              example:
+                code: 200
+                success: true
+                message: Customer group deleted successfully.
+                data:
+                  id: 3
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/CustomerGroupNotFound"
+
+        "409":
+          description: The customer group is still in use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Customer group is in use and cannot be deleted.
+                errors:
+                  used_in: [customers]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /customer-groups/{id}/status:
+    patch:
+      tags:
+        - Customer Groups
+      summary: Change customer group status
+      description: |
+        Sets the customer group's status to `Approved` or `Inactive`.
+
+        Required permission: `module:customer-manage.menu:customer-group.permission:change-status`
+      operationId: updateCustomerGroupStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CustomerGroupId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CustomerGroup"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 2
+                  company_id: 1
+                  name: Wholesale
+                  status: Inactive
+                  created_at: "2026-11-09T10:20:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/CustomerGroupNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+  /supplier-groups:
+    get:
+      tags:
+        - Supplier Groups
+      summary: List supplier groups
+      description: |
+        Paginated list of the logged-in user's company supplier groups (the same company filter as the
+        web list `admin/inventory-setup-supplierGroup-list`; this also applies to the super admin).
+        Soft-deleted supplier groups are not listed. The supplier groups are in `data.items` and the
+        pagination info in `data.pagination`.
+
+        Required permission: `module:supplier-manage.menu:supplier-group.permission:view`
+      operationId: listSupplierGroups
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name or status.
+          schema:
+            type: string
+          example: Importer
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Supplier group list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/SupplierGroup"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 2
+                      company_id: 1
+                      name: Importer
+                      status: Approved
+                      created_at: "2026-11-09T10:20:00.000000Z"
+                    - id: 1
+                      company_id: 1
+                      name: Local
+                      status: Inactive
+                      created_at: "2026-11-09T10:15:00.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 2
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Supplier Groups
+      summary: Create supplier group
+      description: |
+        Creates a supplier group for the logged-in user's company. The validation rules are the same
+        as the web form (`admin/inventory-setup-supplierGroup-create`), read from the supplier group form settings, plus a unique
+        name check.
+
+        - `status` is always saved as `Approved`, even if another value is sent.
+        - `name` must be unique within the logged-in user's company (not case-sensitive).
+          Soft-deleted supplier groups and other companies' supplier groups are not counted.
+
+        Required permission: `module:supplier-manage.menu:supplier-group.permission:create`
+      operationId: createSupplierGroup
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  $ref: "#/components/schemas/SupplierGroupName"
+
+      responses:
+        "201":
+          description: Supplier group created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/SupplierGroup"
+              example:
+                code: 201
+                success: true
+                message: Supplier group created successfully.
+                data:
+                  id: 3
+                  company_id: 1
+                  name: Local Supplier
+                  status: Approved
+                  created_at: "2026-11-09T10:30:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/SupplierGroupValidationError"
+
+  /supplier-groups/{id}:
+    put:
+      tags:
+        - Supplier Groups
+      summary: Update supplier group
+      description: |
+        Updates a supplier group's name and status (API version of the web edit form
+        `admin/inventory-setup-supplierGroup-edit/{id}`). The validation rules are the same as the web form,
+        plus a unique name check and a required status.
+
+        - `name` must be unique within the logged-in user's company (not case-sensitive); the
+          supplier group's own name may be kept.
+        - `status` is taken from the body (`Approved`, `Inactive`, `Pending` or `Cancel`).
+        - `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:supplier-manage.menu:supplier-group.permission:edit`
+      operationId: updateSupplierGroup
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/SupplierGroupId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - status
+              properties:
+                name:
+                  $ref: "#/components/schemas/SupplierGroupName"
+                status:
+                  type: string
+                  enum: [Approved, Inactive, Pending, Cancel]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Supplier group updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/SupplierGroup"
+              example:
+                code: 200
+                success: true
+                message: Supplier group updated successfully.
+                data:
+                  id: 1
+                  company_id: 1
+                  name: Local Supplier
+                  status: Inactive
+                  created_at: "2026-11-09T10:15:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/SupplierGroupNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/SupplierGroupValidationError"
+
+    delete:
+      tags:
+        - Supplier Groups
+      summary: Delete supplier group
+      description: |
+        Soft-deletes a supplier group (`deleted_at` is set; the row stays in the database). A deleted
+        supplier group is no longer listed, returns `404` on every other endpoint, and its name can be
+        used again.
+
+        The supplier group cannot be deleted (`409`) when it is used by any of the suppliers
+        (`suppliers.supplier_type`; soft-deleted suppliers are not counted). The web list uses the same check
+        to hide the delete button; the API blocks the delete on the server.
+
+        Required permission: `module:supplier-manage.menu:supplier-group.permission:delete`
+      operationId: deleteSupplierGroup
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/SupplierGroupId"
+
+      responses:
+        "200":
+          description: Supplier group deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 3
+              example:
+                code: 200
+                success: true
+                message: Supplier group deleted successfully.
+                data:
+                  id: 3
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/SupplierGroupNotFound"
+
+        "409":
+          description: The supplier group is still in use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Supplier group is in use and cannot be deleted.
+                errors:
+                  used_in: [suppliers]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /supplier-groups/{id}/status:
+    patch:
+      tags:
+        - Supplier Groups
+      summary: Change supplier group status
+      description: |
+        Sets the supplier group's status to `Approved` or `Inactive`.
+
+        Required permission: `module:supplier-manage.menu:supplier-group.permission:change-status`
+      operationId: updateSupplierGroupStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/SupplierGroupId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/SupplierGroup"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 2
+                  company_id: 1
+                  name: Importer
+                  status: Inactive
+                  created_at: "2026-11-09T10:20:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/SupplierGroupNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+  /units:
+    get:
+      tags:
+        - Units
+      summary: List units
+      description: |
+        Paginated list of the logged-in user's company units (the same company filter as the
+        web list `admin/inventory-setup-unit-list`; this also applies to the super admin).
+        Soft-deleted units are not listed. The units are in `data.items` and the
+        pagination info in `data.pagination`.
+
+        Required permission: `module:product-manage.menu:unit.permission:view`
+      operationId: listUnits
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name or status.
+          schema:
+            type: string
+          example: KG
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Unit list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Unit"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 2
+                      company_id: 1
+                      name: KG
+                      status: Approved
+                      created_at: "2026-11-09T10:20:00.000000Z"
+                    - id: 1
+                      company_id: 1
+                      name: L
+                      status: Inactive
+                      created_at: "2026-11-09T10:15:00.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 2
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Units
+      summary: Create unit
+      description: |
+        Creates a unit for the logged-in user's company. The validation rules are the same
+        as the web form (`admin/inventory-setup-unit-create`), read from the unit form settings, plus a unique
+        name check.
+
+        - `status` is always saved as `Approved`, even if another value is sent.
+        - `name` must be unique within the logged-in user's company (not case-sensitive).
+          Soft-deleted units and other companies' units are not counted.
+
+        Required permission: `module:product-manage.menu:unit.permission:create`
+      operationId: createUnit
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  $ref: "#/components/schemas/UnitName"
+
+      responses:
+        "201":
+          description: Unit created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Unit"
+              example:
+                code: 201
+                success: true
+                message: Unit created successfully.
+                data:
+                  id: 3
+                  company_id: 1
+                  name: PCS
+                  status: Approved
+                  created_at: "2026-11-09T10:30:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/UnitValidationError"
+
+  /units/{id}:
+    put:
+      tags:
+        - Units
+      summary: Update unit
+      description: |
+        Updates a unit's name and status (API version of the web edit form
+        `admin/inventory-setup-unit-edit/{id}`). The validation rules are the same as the web form,
+        plus a unique name check and a required status.
+
+        - `name` must be unique within the logged-in user's company (not case-sensitive); the
+          unit's own name may be kept.
+        - `status` is taken from the body (`Approved`, `Inactive`, `Pending` or `Cancel`).
+        - `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:product-manage.menu:unit.permission:edit`
+      operationId: updateUnit
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/UnitId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - status
+              properties:
+                name:
+                  $ref: "#/components/schemas/UnitName"
+                status:
+                  type: string
+                  enum: [Approved, Inactive, Pending, Cancel]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Unit updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Unit"
+              example:
+                code: 200
+                success: true
+                message: Unit updated successfully.
+                data:
+                  id: 1
+                  company_id: 1
+                  name: PCS
+                  status: Inactive
+                  created_at: "2026-11-09T10:15:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/UnitNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/UnitValidationError"
+
+    delete:
+      tags:
+        - Units
+      summary: Delete unit
+      description: |
+        Soft-deletes a unit (`deleted_at` is set; the row stays in the database). A deleted
+        unit is no longer listed, returns `404` on every other endpoint, and its name can be
+        used again.
+
+        The unit cannot be deleted (`409`) when it is used by any of the products
+        (`products.unit_id`; soft-deleted products are not counted). The web list uses the same check
+        to hide the delete button; the API blocks the delete on the server.
+
+        Required permission: `module:product-manage.menu:unit.permission:delete`
+      operationId: deleteUnit
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/UnitId"
+
+      responses:
+        "200":
+          description: Unit deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 3
+              example:
+                code: 200
+                success: true
+                message: Unit deleted successfully.
+                data:
+                  id: 3
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/UnitNotFound"
+
+        "409":
+          description: The unit is still in use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Unit is in use and cannot be deleted.
+                errors:
+                  used_in: [products]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /units/{id}/status:
+    patch:
+      tags:
+        - Units
+      summary: Change unit status
+      description: |
+        Sets the unit's status to `Approved` or `Inactive`.
+
+        Required permission: `module:product-manage.menu:unit.permission:change-status`
+      operationId: updateUnitStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/UnitId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Unit"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 2
+                  company_id: 1
+                  name: KG
+                  status: Inactive
+                  created_at: "2026-11-09T10:20:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/UnitNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+  /product-types:
+    get:
+      tags:
+        - Product Types
+      summary: List product types
+      description: |
+        Paginated list of the logged-in user's company product types (the same company filter as the
+        web list `admin/inventory-setup-product-type-list`; this also applies to the super admin).
+        Soft-deleted product types are not listed. The product types are in `data.items` and the
+        pagination info in `data.pagination`.
+
+        Required permission: `module:product-manage.menu:product-type.permission:view`
+      operationId: listProductTypes
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name or status.
+          schema:
+            type: string
+          example: Raw Material
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Product type list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/ProductType"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 2
+                      company_id: 1
+                      name: Raw Material
+                      status: Approved
+                      created_at: "2026-11-09T10:20:00.000000Z"
+                    - id: 1
+                      company_id: 1
+                      name: Finished Good
+                      status: Inactive
+                      created_at: "2026-11-09T10:15:00.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 2
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Product Types
+      summary: Create product type
+      description: |
+        Creates a product type for the logged-in user's company. The validation rules are the same
+        as the web form (`admin/inventory-setup-product-type-create`), read from the product type form settings, plus a unique
+        name check.
+
+        - `status` is required and taken from the body (`Approved`, `Inactive`, `Pending` or `Cancel`).
+          The web form also requires it.
+        - `name` must be unique within the logged-in user's company (not case-sensitive).
+          Soft-deleted product types and other companies' product types are not counted.
+
+        Required permission: `module:product-manage.menu:product-type.permission:create`
+      operationId: createProductType
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - status
+              properties:
+                name:
+                  $ref: "#/components/schemas/ProductTypeName"
+                status:
+                  type: string
+                  enum: [Approved, Inactive, Pending, Cancel]
+                  example: Approved
+
+      responses:
+        "201":
+          description: Product type created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ProductType"
+              example:
+                code: 201
+                success: true
+                message: Product type created successfully.
+                data:
+                  id: 3
+                  company_id: 1
+                  name: Semi Finished Good
+                  status: Approved
+                  created_at: "2026-11-09T10:30:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/ProductTypeValidationError"
+
+  /product-types/{id}:
+    put:
+      tags:
+        - Product Types
+      summary: Update product type
+      description: |
+        Updates a product type's name and status (API version of the web edit form
+        `admin/inventory-setup-product-type-edit/{id}`). The validation rules are the same as the web form,
+        plus a unique name check and a required status.
+
+        - `name` must be unique within the logged-in user's company (not case-sensitive); the
+          product type's own name may be kept.
+        - `status` is taken from the body (`Approved`, `Inactive`, `Pending` or `Cancel`).
+        - `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:product-manage.menu:product-type.permission:edit`
+      operationId: updateProductType
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ProductTypeId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - status
+              properties:
+                name:
+                  $ref: "#/components/schemas/ProductTypeName"
+                status:
+                  type: string
+                  enum: [Approved, Inactive, Pending, Cancel]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Product type updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ProductType"
+              example:
+                code: 200
+                success: true
+                message: Product type updated successfully.
+                data:
+                  id: 1
+                  company_id: 1
+                  name: Semi Finished Good
+                  status: Inactive
+                  created_at: "2026-11-09T10:15:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/ProductTypeNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/ProductTypeValidationError"
+
+    delete:
+      tags:
+        - Product Types
+      summary: Delete product type
+      description: |
+        Soft-deletes a product type (`deleted_at` is set; the row stays in the database). A deleted
+        product type is no longer listed, returns `404` on every other endpoint, and its name can be
+        used again.
+
+        The product type cannot be deleted (`409`) when it is used by any of the products
+        (`products.product_type_id`; soft-deleted products are not counted). The web list uses the same check
+        to hide the delete button; the API blocks the delete on the server.
+
+        Required permission: `module:product-manage.menu:product-type.permission:delete`
+      operationId: deleteProductType
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ProductTypeId"
+
+      responses:
+        "200":
+          description: Product type deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 3
+              example:
+                code: 200
+                success: true
+                message: Product type deleted successfully.
+                data:
+                  id: 3
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/ProductTypeNotFound"
+
+        "409":
+          description: The product type is still in use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Product type is in use and cannot be deleted.
+                errors:
+                  used_in: [products]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /product-types/{id}/status:
+    patch:
+      tags:
+        - Product Types
+      summary: Change product type status
+      description: |
+        Sets the product type's status to `Approved` or `Inactive`.
+
+        Required permission: `module:product-manage.menu:product-type.permission:change-status`
+      operationId: updateProductTypeStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ProductTypeId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ProductType"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 2
+                  company_id: 1
+                  name: Raw Material
+                  status: Inactive
+                  created_at: "2026-11-09T10:20:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/ProductTypeNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
 components:
   securitySchemes:
     sessionCookie:
@@ -1626,6 +3245,50 @@ components:
       description: |
         Department ID. An unknown, soft-deleted or non-numeric ID returns `404`. Departments of
         other companies are not blocked.
+      schema:
+        type: integer
+      example: 2
+
+    CustomerGroupId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Customer group ID. An unknown, soft-deleted or non-numeric ID, or a customer group of another company,
+        returns `404`.
+      schema:
+        type: integer
+      example: 2
+
+    SupplierGroupId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Supplier group ID. An unknown, soft-deleted or non-numeric ID, or a supplier group of another company,
+        returns `404`.
+      schema:
+        type: integer
+      example: 2
+
+    UnitId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Unit ID. An unknown, soft-deleted or non-numeric ID, or a unit of another company,
+        returns `404`.
+      schema:
+        type: integer
+      example: 2
+
+    ProductTypeId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Product type ID. An unknown, soft-deleted or non-numeric ID, or a product type of another company,
+        returns `404`.
       schema:
         type: integer
       example: 2
@@ -1851,6 +3514,134 @@ components:
         The database column holds only **55** characters: a longer name (56–100) passes validation
         but is saved cut to 55 characters.
       example: Test Store
+
+    CustomerGroup:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 2
+        company_id:
+          type: integer
+          description: "`0` for customer groups created by the super admin."
+          example: 1
+        name:
+          type: [string, "null"]
+          example: Wholesale
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2026-11-09T10:20:00.000000Z"
+
+    CustomerGroupName:
+      type: string
+      minLength: 2
+      maxLength: 100
+      description: |
+        Rules come from the customer group form settings (same as the web form), plus a 100-character
+        limit (the size of the database column). Must be unique within the logged-in user's
+        company (not case-sensitive, soft-deleted customer groups not counted).
+      example: Wholesale Partner
+
+    SupplierGroup:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 2
+        company_id:
+          type: integer
+          description: "`0` for supplier groups created by the super admin."
+          example: 1
+        name:
+          type: [string, "null"]
+          example: Importer
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2026-11-09T10:20:00.000000Z"
+
+    SupplierGroupName:
+      type: string
+      minLength: 2
+      maxLength: 100
+      description: |
+        Rules come from the supplier group form settings (same as the web form), plus a 100-character
+        limit (the size of the database column). Must be unique within the logged-in user's
+        company (not case-sensitive, soft-deleted supplier groups not counted).
+      example: Local Supplier
+
+    Unit:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 2
+        company_id:
+          type: integer
+          description: "`0` for units created by the super admin."
+          example: 1
+        name:
+          type: [string, "null"]
+          example: KG
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2026-11-09T10:20:00.000000Z"
+
+    UnitName:
+      type: string
+      minLength: 2
+      maxLength: 100
+      description: |
+        Rules come from the unit form settings (same as the web form), plus a 100-character
+        limit (the size of the database column). Must be unique within the logged-in user's
+        company (not case-sensitive, soft-deleted units not counted).
+      example: PCS
+
+    ProductType:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 2
+        company_id:
+          type: integer
+          description: "`0` for product types created by the super admin."
+          example: 1
+        name:
+          type: [string, "null"]
+          example: Raw Material
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2026-11-09T10:20:00.000000Z"
+
+    ProductTypeName:
+      type: string
+      minLength: 2
+      maxLength: 100
+      description: |
+        Rules come from the product type form settings (same as the web form), plus a 100-character
+        limit (the size of the database column). Must be unique within the logged-in user's
+        company (not case-sensitive, soft-deleted product types not counted).
+      example: Semi Finished Good
 
     Decimal:
       type: [string, number]
@@ -2274,6 +4065,194 @@ components:
                     - The name has already been taken.
             invalidStatus:
               summary: Update only — status missing or not Approved / Inactive / Pending
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    CustomerGroupNotFound:
+      description: No customer group with this ID in the logged-in user's company, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    CustomerGroupValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingName:
+              summary: Name missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+            duplicateName:
+              summary: Name already used by another customer group of the company
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken. "
+                errors:
+                  name:
+                    - The name has already been taken.
+            invalidStatus:
+              summary: Update only — status missing or not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    SupplierGroupNotFound:
+      description: No supplier group with this ID in the logged-in user's company, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    SupplierGroupValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingName:
+              summary: Name missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+            duplicateName:
+              summary: Name already used by another supplier group of the company
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken. "
+                errors:
+                  name:
+                    - The name has already been taken.
+            invalidStatus:
+              summary: Update only — status missing or not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    UnitNotFound:
+      description: No unit with this ID in the logged-in user's company, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    UnitValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingName:
+              summary: Name missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+            duplicateName:
+              summary: Name already used by another unit of the company
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken. "
+                errors:
+                  name:
+                    - The name has already been taken.
+            invalidStatus:
+              summary: Update only — status missing or not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    ProductTypeNotFound:
+      description: No product type with this ID in the logged-in user's company, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    ProductTypeValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingName:
+              summary: Name missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+            duplicateName:
+              summary: Name already used by another product type of the company
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken. "
+                errors:
+                  name:
+                    - The name has already been taken.
+            invalidStatus:
+              summary: Status missing or not Approved / Inactive / Pending / Cancel
               value:
                 code: 422
                 success: false
