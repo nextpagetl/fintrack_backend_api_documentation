@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.5.0
+  version: 1.6.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -44,8 +44,8 @@ info:
     `exception`, `file`, `line` and `trace`. Production must run with `APP_DEBUG=false`.
 
     ## Permissions
-    Role, branch, department, customer group, supplier group, unit, product type, bank account and
-    account type endpoints also need a Spatie permission, named
+    Role, branch, store, division, department, customer group, supplier group, unit, product type,
+    bank account and account type endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -76,6 +76,10 @@ tags:
     description: User role management (Spatie permission)
   - name: Branches
     description: Branch management (Settings → Branch)
+  - name: Stores
+    description: Store management (Settings → Store)
+  - name: Divisions
+    description: Division management (Settings → Division)
   - name: Departments
     description: Department management (Settings → Department)
   - name: Customer Groups
@@ -1173,6 +1177,935 @@ paths:
 
         "404":
           $ref: "#/components/responses/BranchNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+  /stores:
+    get:
+      tags:
+        - Stores
+      summary: List stores
+      description: |
+        Paginated list of stores (API version of the web list `admin/settings-store-list`).
+        The super admin sees the stores of every company; other users see only their own
+        company's stores. Soft-deleted stores are not listed. The stores are in `data.items`
+        and the pagination info in `data.pagination`.
+
+        Required permission: `module:system-configuration.menu:store.permission:view`
+      operationId: listStores
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name, email, phone, address or status.
+          schema:
+            type: string
+          example: Tongi
+        - name: branch_id
+          in: query
+          description: Only the stores of this branch. A non-numeric value is ignored.
+          schema:
+            type: integer
+          example: 1
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Store list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Store"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 2
+                      company_id: 1
+                      branch_id: 1
+                      branch:
+                        id: 1
+                        name: Dhaka
+                      name: Tongi
+                      email: tongi.store@example.com
+                      phone: "01700000202"
+                      address: Tongi Road, Gazipur
+                      is_default: "NO"
+                      status: Approved
+                      created_at: "2026-11-09T10:20:00.000000Z"
+                    - id: 1
+                      company_id: 1
+                      branch_id: 1
+                      branch:
+                        id: 1
+                        name: Dhaka
+                      name: Karamtola
+                      email: karamtola.store@example.com
+                      phone: "01700000201"
+                      address: Karamtola, Dhaka
+                      is_default: "Yes"
+                      status: Approved
+                      created_at: "2026-11-09T10:15:00.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 2
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Stores
+      summary: Create store
+      description: |
+        Creates a store (API version of the web form `admin/settings-store-create`). The
+        validation rules are the same as the web form, read from the store form settings, plus:
+
+        - `branch_id` is required and must be an existing (not soft-deleted) branch.
+        - `name` must be unique within the branch (not case-sensitive). Soft-deleted stores
+          are not counted; the same name may be used in another branch.
+        - `email` may be at most 50 characters.
+        - `is_default` must be `Yes` or `NO`.
+
+        `status` is always saved as `Approved` and `company_id` is set to the logged-in
+        user's company, even if other values are sent.
+
+        Required permission: `module:system-configuration.menu:store.permission:create`
+      operationId: createStore
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoreRequest"
+
+      responses:
+        "201":
+          description: Store created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Store"
+              example:
+                code: 201
+                success: true
+                message: Store created successfully.
+                data:
+                  id: 6
+                  company_id: 1
+                  branch_id: 2
+                  branch:
+                    id: 2
+                    name: Chattogram
+                  name: Agrabad Store
+                  email: agrabad.store@example.com
+                  phone: "01711000111"
+                  address: Agrabad, Chattogram
+                  is_default: "NO"
+                  status: Approved
+                  created_at: "2026-11-09T10:30:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/StoreValidationError"
+
+  /stores/{id}:
+    put:
+      tags:
+        - Stores
+      summary: Update store
+      description: |
+        Updates a store (API version of the web edit form `admin/settings-store-edit/{id}`).
+        This is a **partial update**: only the fields in the body are validated and changed;
+        every field that is not sent keeps its current value. Sending a nullable field as
+        `null` (for example `"email": null`) clears it.
+
+        - `status` is changed only when sent (`Approved`, `Inactive`, `Pending` or `Cancel`);
+          otherwise the store keeps its current status.
+        - `name` must be unique within the branch the store ends up in (the new `branch_id`
+          if sent, otherwise the current branch). Moving a store to another branch without a
+          new name checks the current name in the new branch.
+        - Unique checks on `phone`, `email` and `name` ignore this store.
+        - `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:system-configuration.menu:store.permission:edit`
+      operationId: updateStore
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/StoreId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: All fields are optional; send only what should change.
+              properties:
+                branch_id:
+                  type: integer
+                  description: Existing (not soft-deleted) branch.
+                  example: 2
+                name:
+                  type: string
+                  minLength: 2
+                  maxLength: 100
+                  example: Agrabad Store
+                phone:
+                  type: string
+                  description: Bangladeshi phone number; unique across all stores.
+                  example: "01711000111"
+                email:
+                  type: [string, "null"]
+                  format: email
+                  maxLength: 50
+                  example: agrabad.store@example.com
+                address:
+                  type: [string, "null"]
+                  maxLength: 200
+                  example: Agrabad, Chattogram
+                is_default:
+                  type: [string, "null"]
+                  enum: ["Yes", "NO", null]
+                  example: "NO"
+                status:
+                  type: string
+                  enum: [Approved, Inactive, Pending, Cancel]
+                  example: Inactive
+            examples:
+              addressOnly:
+                summary: Change only the address
+                value:
+                  address: Agrabad Commercial Area
+              nameAndStatus:
+                summary: Rename and change status
+                value:
+                  name: Agrabad Store 2
+                  status: Pending
+              clearEmail:
+                summary: Clear the email
+                value:
+                  email: null
+
+      responses:
+        "200":
+          description: Store updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Store"
+              example:
+                code: 200
+                success: true
+                message: Store updated successfully.
+                data:
+                  id: 6
+                  company_id: 1
+                  branch_id: 2
+                  branch:
+                    id: 2
+                    name: Chattogram
+                  name: Agrabad Store
+                  email: agrabad.store@example.com
+                  phone: "01711000111"
+                  address: Agrabad Commercial Area
+                  is_default: "NO"
+                  status: Approved
+                  created_at: "2026-11-09T10:30:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/StoreNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/StoreValidationError"
+
+    delete:
+      tags:
+        - Stores
+      summary: Delete store
+      description: |
+        Soft-deletes a store (`deleted_at` is set; the row stays in the database). A deleted
+        store is no longer listed and returns `404` on every other endpoint.
+
+        The store cannot be deleted (`409`) when:
+        - it is the default store (`is_default = Yes`), or
+        - it is used by any stock summary, stock, purchase, sale, POS sale or ledger entry
+          (`errors.used_in` lists which tables).
+
+        The web list only hides the delete button; the API blocks the delete on the server.
+
+        Required permission: `module:system-configuration.menu:store.permission:delete`
+      operationId: deleteStore
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/StoreId"
+
+      responses:
+        "200":
+          description: Store deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 6
+              example:
+                code: 200
+                success: true
+                message: Store deleted successfully.
+                data:
+                  id: 6
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/StoreNotFound"
+
+        "409":
+          description: The store is the default store or is still in use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                defaultStore:
+                  summary: Default store
+                  value:
+                    code: 409
+                    success: false
+                    message: Default store cannot be deleted.
+                    errors: null
+                inUse:
+                  summary: Store in use
+                  value:
+                    code: 409
+                    success: false
+                    message: Store is in use and cannot be deleted.
+                    errors:
+                      used_in: [stock_summaries, stocks, sales, generals]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /stores/{id}/status:
+    patch:
+      tags:
+        - Stores
+      summary: Change store status
+      description: |
+        Sets the store's status to `Approved` or `Inactive`.
+
+        Required permission: `module:system-configuration.menu:store.permission:change-status`
+      operationId: updateStoreStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/StoreId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Store"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 6
+                  company_id: 1
+                  branch_id: 2
+                  branch:
+                    id: 2
+                    name: Chattogram
+                  name: Agrabad Store
+                  email: agrabad.store@example.com
+                  phone: "01711000111"
+                  address: Agrabad, Chattogram
+                  is_default: "NO"
+                  status: Inactive
+                  created_at: "2026-11-09T10:30:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/StoreNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+  /divisions:
+    get:
+      tags:
+        - Divisions
+      summary: List divisions
+      description: |
+        Paginated list of divisions (API version of the web list `admin/division-list`).
+        Divisions are not filtered by company (same as the web list). Soft-deleted divisions
+        are not listed. The divisions are in `data.items` and the pagination info in
+        `data.pagination`.
+
+        Required permission: `module:system-configuration.menu:division.permission:view`
+      operationId: listDivisions
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name, Bangla name, URL or status.
+          schema:
+            type: string
+          example: Dhaka
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Division list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Division"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 4
+                      company_id: 1
+                      name: Barisal
+                      bn_name: বরিশাল
+                      url: www.barisaldiv.gov.bd
+                      status: Approved
+                      created_at: "2025-01-18T10:02:08.000000Z"
+                    - id: 6
+                      company_id: 1
+                      name: Dhaka
+                      bn_name: ঢাকা
+                      url: www.dhakadiv.gov.bd
+                      status: Approved
+                      created_at: "2025-01-18T10:02:08.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 2
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Divisions
+      summary: Create division
+      description: |
+        Creates a division (API version of the web form `admin/division-create`). The
+        validation rules are the same as the web form, read from the division form settings, plus:
+
+        - `name` must be unique (not case-sensitive). Soft-deleted divisions are not counted.
+        - `bn_name` may be at most 100 characters and `url` at most 255.
+
+        `url` must be a full URL with a scheme (`https://dhakadiv.gov.bd`); `www.dhakadiv.gov.bd`
+        is rejected. `status` is always saved as `Approved` and `company_id` is set to the
+        logged-in user's company, even if other values are sent.
+
+        Required permission: `module:system-configuration.menu:division.permission:create`
+      operationId: createDivision
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DivisionRequest"
+
+      responses:
+        "201":
+          description: Division created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Division"
+              example:
+                code: 201
+                success: true
+                message: Division created successfully.
+                data:
+                  id: 9
+                  company_id: 1
+                  name: Test Division
+                  bn_name: টেস্ট
+                  url: https://test.gov.bd
+                  status: Approved
+                  created_at: "2026-11-09T10:30:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/DivisionValidationError"
+
+  /divisions/{id}:
+    put:
+      tags:
+        - Divisions
+      summary: Update division
+      description: |
+        Updates a division (API version of the web edit form `admin/division-edit/{id}`).
+        This is a **partial update**: only the fields in the body are validated and changed;
+        every field that is not sent keeps its current value. Sending `bn_name` or `url` as
+        `null` clears it.
+
+        - `status` is changed only when sent (`Approved`, `Inactive`, `Pending` or `Cancel`);
+          otherwise the division keeps its current status.
+        - `name` must be unique (not case-sensitive); the division's own name may be kept.
+        - `url` is checked only when sent, so a division with an older `www…` URL can still be
+          renamed without sending `url`.
+        - `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:system-configuration.menu:division.permission:edit`
+      operationId: updateDivision
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/DivisionId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: All fields are optional; send only what should change.
+              properties:
+                name:
+                  type: string
+                  minLength: 2
+                  maxLength: 100
+                  example: Test Division 2
+                bn_name:
+                  type: [string, "null"]
+                  maxLength: 100
+                  example: টেস্ট
+                url:
+                  type: [string, "null"]
+                  format: uri
+                  maxLength: 255
+                  example: https://test.gov.bd
+                status:
+                  type: string
+                  enum: [Approved, Inactive, Pending, Cancel]
+                  example: Pending
+            examples:
+              nameAndStatus:
+                summary: Rename and change status
+                value:
+                  name: Test Division 2
+                  status: Pending
+              clearUrl:
+                summary: Clear the URL
+                value:
+                  url: null
+
+      responses:
+        "200":
+          description: Division updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Division"
+              example:
+                code: 200
+                success: true
+                message: Division updated successfully.
+                data:
+                  id: 9
+                  company_id: 1
+                  name: Test Division 2
+                  bn_name: টেস্ট
+                  url: https://test.gov.bd
+                  status: Pending
+                  created_at: "2026-11-09T10:30:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/DivisionNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/DivisionValidationError"
+
+    delete:
+      tags:
+        - Divisions
+      summary: Delete division
+      description: |
+        Soft-deletes a division (`deleted_at` is set; the row stays in the database). A deleted
+        division is no longer listed, returns `404` on every other endpoint, and its name can be
+        used again.
+
+        The division cannot be deleted (`409`) when it is used by any district, customer or
+        supplier (`errors.used_in` lists which tables). The web deletes without this check; the
+        API blocks the delete on the server.
+
+        Required permission: `module:system-configuration.menu:division.permission:delete`
+      operationId: deleteDivision
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/DivisionId"
+
+      responses:
+        "200":
+          description: Division deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 9
+              example:
+                code: 200
+                success: true
+                message: Division deleted successfully.
+                data:
+                  id: 9
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/DivisionNotFound"
+
+        "409":
+          description: The division is still in use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Division is in use and cannot be deleted.
+                errors:
+                  used_in: [districts, customers]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /divisions/{id}/status:
+    patch:
+      tags:
+        - Divisions
+      summary: Change division status
+      description: |
+        Sets the division's status to `Approved` or `Inactive`.
+
+        Required permission: `module:system-configuration.menu:division.permission:change-status`
+      operationId: updateDivisionStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/DivisionId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Division"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 9
+                  company_id: 1
+                  name: Test Division
+                  bn_name: টেস্ট
+                  url: https://test.gov.bd
+                  status: Inactive
+                  created_at: "2026-11-09T10:30:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/DivisionNotFound"
 
         "419":
           $ref: "#/components/responses/CsrfMismatch"
@@ -3880,6 +4813,28 @@ components:
         type: integer
       example: 2
 
+    StoreId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Store ID. An unknown, soft-deleted or non-numeric ID returns `404`. Stores of other
+        companies are not blocked.
+      schema:
+        type: integer
+      example: 6
+
+    DivisionId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Division ID. An unknown, soft-deleted or non-numeric ID returns `404`. Divisions are not
+        filtered by company.
+      schema:
+        type: integer
+      example: 9
+
     DepartmentId:
       name: id
       in: path
@@ -4144,6 +5099,155 @@ components:
           enum: ["Yes", "NO", null]
           description: "Missing or `null` is saved as `null` (not a default branch)."
           example: "NO"
+
+    Store:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 6
+        company_id:
+          type: integer
+          example: 1
+        branch_id:
+          type: integer
+          example: 2
+        branch:
+          type: [object, "null"]
+          description: The store's branch (`null` if the branch was deleted).
+          properties:
+            id:
+              type: integer
+              example: 2
+            name:
+              type: [string, "null"]
+              example: Chattogram
+        name:
+          type: [string, "null"]
+          example: Agrabad Store
+        email:
+          type: [string, "null"]
+          format: email
+          example: agrabad.store@example.com
+        phone:
+          type: [string, "null"]
+          example: "01711000111"
+        address:
+          type: [string, "null"]
+          example: Agrabad, Chattogram
+        is_default:
+          type: [string, "null"]
+          enum: ["Yes", "NO", null]
+          description: "`Yes` = a default store, used when a transaction has no store."
+          example: "NO"
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2026-11-09T10:30:00.000000Z"
+
+    StoreRequest:
+      type: object
+      description: |
+        Body for create. Rules come from the store form settings (same as the web form), plus
+        the extra API rules listed on `POST /stores`. `status` is not taken from the body; the
+        store is always saved as `Approved`.
+      required:
+        - branch_id
+        - name
+        - phone
+      properties:
+        branch_id:
+          type: integer
+          description: Existing (not soft-deleted) branch.
+          example: 2
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          description: Unique within the branch (not case-sensitive).
+          example: Agrabad Store
+        phone:
+          type: string
+          description: |
+            Bangladeshi phone number (for example `01711000111`, `+8801711000111`).
+            Must be unique across all stores (soft-deleted ones included) and must not be the
+            phone number of any branch.
+          example: "01711000111"
+        email:
+          type: [string, "null"]
+          format: email
+          maxLength: 50
+          description: Must be unique across all stores (soft-deleted ones included).
+          example: agrabad.store@example.com
+        address:
+          type: [string, "null"]
+          maxLength: 200
+          example: Agrabad, Chattogram
+        is_default:
+          type: [string, "null"]
+          enum: ["Yes", "NO", null]
+          description: |
+            Missing or `null` is saved as `null` (not a default store). Setting `Yes` does not
+            change other stores' `is_default`.
+          example: "NO"
+
+    Division:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 6
+        company_id:
+          type: integer
+          example: 1
+        name:
+          type: [string, "null"]
+          example: Dhaka
+        bn_name:
+          type: [string, "null"]
+          description: Name in Bangla.
+          example: ঢাকা
+        url:
+          type: [string, "null"]
+          description: Website. Older rows may hold a URL without a scheme (`www.dhakadiv.gov.bd`).
+          example: www.dhakadiv.gov.bd
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2025-01-18T10:02:08.000000Z"
+
+    DivisionRequest:
+      type: object
+      description: |
+        Body for create. Rules come from the division form settings (same as the web form), plus
+        a unique name. `status` is not taken from the body; the division is always saved as `Approved`.
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          description: Unique across divisions (not case-sensitive; soft-deleted ones not counted).
+          example: Test Division
+        bn_name:
+          type: [string, "null"]
+          maxLength: 100
+          example: টেস্ট
+        url:
+          type: [string, "null"]
+          format: uri
+          maxLength: 255
+          description: Full URL with a scheme (`https://…`).
+          example: https://test.gov.bd
 
     Department:
       type: object
@@ -4750,6 +5854,106 @@ components:
                 errors:
                   is_default:
                     - The selected is default is invalid.
+
+    StoreNotFound:
+      description: No store with this ID, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    StoreValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            duplicateName:
+              summary: Name already used by another store of the same branch
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken in this branch. "
+                errors:
+                  name:
+                    - The name has already been taken in this branch.
+            invalidFields:
+              summary: Invalid phone, is_default, branch or status
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The phone format is invalid. The selected is default is invalid. The selected branch id is invalid. The selected status is invalid. "
+                errors:
+                  phone:
+                    - The phone format is invalid.
+                  is_default:
+                    - The selected is default is invalid.
+                  branch_id:
+                    - The selected branch id is invalid.
+                  status:
+                    - The selected status is invalid.
+            moveToBranchWithSameName:
+              summary: Update only — moving to a branch that already has a store with this name
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken in this branch. "
+                errors:
+                  branch_id:
+                    - The name has already been taken in this branch.
+
+    DivisionNotFound:
+      description: No division with this ID, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    DivisionValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            duplicateName:
+              summary: Name already used by another division
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken. "
+                errors:
+                  name:
+                    - The name has already been taken.
+            invalidUrl:
+              summary: URL without a scheme
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The url must be a valid URL. "
+                errors:
+                  url:
+                    - The url must be a valid URL.
+            invalidStatus:
+              summary: Update only — status not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
 
     DepartmentNotFound:
       description: No department with this ID, or a non-numeric or soft-deleted ID.
