@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.4.0
+  version: 1.5.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -44,8 +44,8 @@ info:
     `exception`, `file`, `line` and `trace`. Production must run with `APP_DEBUG=false`.
 
     ## Permissions
-    Role, branch, department, customer group, supplier group, unit and product type endpoints
-    also need a Spatie permission, named
+    Role, branch, department, customer group, supplier group, unit, product type, bank account and
+    account type endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -86,6 +86,10 @@ tags:
     description: Product unit management (Product Manage → Unit)
   - name: Product Types
     description: Product type management (Product Manage → Product Type)
+  - name: Bank Accounts
+    description: Bank account management (Accounts Setup → Bank)
+  - name: Account Types
+    description: Account type list and status (Accounts Setup → Account Type)
 
 paths:
   /csrf-token:
@@ -3199,6 +3203,644 @@ paths:
                   status:
                     - The selected status is invalid.
 
+  /bank-accounts:
+    get:
+      tags:
+        - Bank Accounts
+      summary: List bank accounts
+      description: |
+        Paginated list of the logged-in user's company bank accounts (the same company filter as the
+        web list `admin/account-setup-bank-account-list`; this also applies to the super admin).
+        Soft-deleted bank accounts are not listed. The bank accounts are in `data.items` and the
+        pagination info in `data.pagination`.
+
+        Required permission: `module:accounts-setup.menu:bank.permission:view`
+      operationId: listBankAccounts
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, bank name, account name, account number, branch or status.
+          schema:
+            type: string
+          example: Islami
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, bank_name, account_name, account_number, branch, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Bank account list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/BankAccount"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 48
+                      company_id: 1
+                      bank_name: Test Bank Limited
+                      account_name: Test Ltd
+                      account_number: "1234567890"
+                      branch: Motijheel
+                      status: Approved
+                      created_at: "2026-11-09T10:20:00.000000Z"
+                    - id: 2
+                      company_id: 1
+                      bank_name: Dutch-Bangla Bank Limited (DBBL)
+                      account_name: null
+                      account_number: null
+                      branch: null
+                      status: Approved
+                      created_at: "2025-01-18T10:02:06.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 2
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Bank Accounts
+      summary: Create bank account
+      description: |
+        Creates a bank account for the logged-in user's company. The `bank_name` rules are the same
+        as the web form (`admin/account-setup-bank-account-create`), read from the bank form settings,
+        plus a unique name check. `account_name`, `account_number` and `branch` are not in the web form
+        but are saved by the same code, so the API accepts them.
+
+        - `status` is always saved as `Approved`, even if another value is sent.
+        - `bank_name` must be unique within the logged-in user's company (not case-sensitive).
+          Soft-deleted bank accounts and other companies' bank accounts are not counted.
+
+        Required permission: `module:accounts-setup.menu:bank.permission:create`
+      operationId: createBankAccount
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - bank_name
+              properties:
+                bank_name:
+                  $ref: "#/components/schemas/BankName"
+                account_name:
+                  type: [string, "null"]
+                  maxLength: 100
+                  example: Test Ltd
+                account_number:
+                  type: [string, "null"]
+                  maxLength: 255
+                  example: "1234567890"
+                branch:
+                  type: [string, "null"]
+                  maxLength: 100
+                  example: Motijheel
+
+      responses:
+        "201":
+          description: Bank account created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/BankAccount"
+              example:
+                code: 201
+                success: true
+                message: Bank account created successfully.
+                data:
+                  id: 48
+                  company_id: 1
+                  bank_name: Test Bank Limited
+                  account_name: Test Ltd
+                  account_number: "1234567890"
+                  branch: Motijheel
+                  status: Approved
+                  created_at: "2026-11-09T10:20:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/BankAccountValidationError"
+
+  /bank-accounts/{id}:
+    put:
+      tags:
+        - Bank Accounts
+      summary: Update bank account
+      description: |
+        Updates a bank account (API version of the web edit form
+        `admin/account-setup-bank-account-edit/{id}`).
+
+        **Only the fields in the body change.** A field that is not sent keeps its current value;
+        sending `null` clears an optional field (`account_name`, `account_number`, `branch`).
+        `bank_name` and `status` cannot be cleared. An empty body changes nothing and returns `200`.
+
+        - `bank_name` must be unique within the logged-in user's company (not case-sensitive); the
+          bank account's own name may be kept.
+        - `status` is taken from the body when sent (`Approved`, `Inactive`, `Pending` or `Cancel`).
+
+        Required permission: `module:accounts-setup.menu:bank.permission:edit`
+      operationId: updateBankAccount
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/BankAccountId"
+
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bank_name:
+                  $ref: "#/components/schemas/BankName"
+                account_name:
+                  type: [string, "null"]
+                  maxLength: 100
+                account_number:
+                  type: [string, "null"]
+                  maxLength: 255
+                branch:
+                  type: [string, "null"]
+                  maxLength: 100
+                status:
+                  type: string
+                  enum: [Approved, Inactive, Pending, Cancel]
+            examples:
+              branchOnly:
+                summary: Change only the branch (other fields keep their values)
+                value:
+                  branch: Gulshan
+              clearAccountNumber:
+                summary: Clear the account number
+                value:
+                  account_number: null
+              statusOnly:
+                summary: Change only the status
+                value:
+                  status: Pending
+
+      responses:
+        "200":
+          description: Bank account updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/BankAccount"
+              example:
+                code: 200
+                success: true
+                message: Bank account updated successfully.
+                data:
+                  id: 48
+                  company_id: 1
+                  bank_name: Test Bank Limited
+                  account_name: Test Ltd
+                  account_number: "1234567890"
+                  branch: Gulshan
+                  status: Approved
+                  created_at: "2026-11-09T10:20:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/BankAccountNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/BankAccountValidationError"
+
+    delete:
+      tags:
+        - Bank Accounts
+      summary: Delete bank account
+      description: |
+        Soft-deletes a bank account (`deleted_at` is set; the row stays in the database). A deleted
+        bank account is no longer listed, returns `404` on every other endpoint, and its name can be
+        used again.
+
+        The bank account cannot be deleted (`409`) when a not-deleted row in any of these tables uses it
+        (`bank_id`); `errors.used_in` lists which:
+        `bookings`, `credit_notes`, `debit_notes`, `pos`, `purchases`, `purchases_payments`,
+        `purchases_pending_cheques`, `sale_commission_payments`, `sale_payments`, `sale_pending_cheques`,
+        `sale_return_wihout_refs`, `sales`, `sales_quatations`, `service_invoices`, `service_payments`,
+        `service_pending_cheques`, `service_quatations`, `temporary_pending_checks`.
+        The web delete button does **not** have this check.
+
+        Required permission: `module:accounts-setup.menu:bank.permission:delete`
+      operationId: deleteBankAccount
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/BankAccountId"
+
+      responses:
+        "200":
+          description: Bank account deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 48
+              example:
+                code: 200
+                success: true
+                message: Bank account deleted successfully.
+                data:
+                  id: 48
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/BankAccountNotFound"
+
+        "409":
+          description: The bank account is still in use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Bank account is in use and cannot be deleted.
+                errors:
+                  used_in: [sale_payments, sale_pending_cheques]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /bank-accounts/{id}/status:
+    patch:
+      tags:
+        - Bank Accounts
+      summary: Change bank account status
+      description: |
+        Sets the bank account's status to `Approved` or `Inactive`.
+
+        Required permission: `module:accounts-setup.menu:bank.permission:change-status`
+      operationId: updateBankAccountStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/BankAccountId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/BankAccount"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 2
+                  company_id: 1
+                  bank_name: Dutch-Bangla Bank Limited (DBBL)
+                  status: Inactive
+                  created_at: "2025-01-18T10:02:06.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/BankAccountNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+  /account-types:
+    get:
+      tags:
+        - Account Types
+      summary: List account types
+      description: |
+        Paginated list of the logged-in user's company account types (the same company filter as the
+        web list `admin/account-setup-account-type-list`; this also applies to the super admin).
+        Soft-deleted account types are not listed. The account types are in `data.items` and the
+        pagination info in `data.pagination`.
+
+        Account types (Assets, Liability, Owner's Equity, Income, Expense) are referenced by ID in the
+        accounting code and by chart of accounts and vouchers, so the API only lists them and changes
+        their status; create, update and delete are not available.
+
+        Required permission: `module:accounts-setup.menu:account-type.permission:view`
+      operationId: listAccountTypes
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name or status.
+          schema:
+            type: string
+          example: Inc
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Account type list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/AccountType"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 1
+                      company_id: 1
+                      name: Assets
+                      status: Approved
+                      created_at: "2025-01-18T10:02:09.000000Z"
+                    - id: 5
+                      company_id: 1
+                      name: Expense
+                      status: Approved
+                      created_at: "2025-01-18T10:02:09.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 5
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /account-types/{id}/status:
+    patch:
+      tags:
+        - Account Types
+      summary: Change account type status
+      description: |
+        Sets the account type's status to `Approved` or `Inactive`.
+
+        Like the web, there is **no company check**: an account type of another company can be changed too.
+        The status column is a plain string, so the value is checked here.
+
+        Required permission: `module:accounts-setup.menu:account-type.permission:change-status`
+      operationId: updateAccountTypeStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/AccountTypeId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/AccountType"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 4
+                  company_id: 1
+                  name: Income
+                  status: Inactive
+                  created_at: "2025-01-18T10:02:06.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/AccountTypeNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
 components:
   securitySchemes:
     sessionCookie:
@@ -3292,6 +3934,28 @@ components:
       schema:
         type: integer
       example: 2
+
+    BankAccountId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Bank account ID. An unknown, soft-deleted or non-numeric ID, or a bank account of another
+        company, returns `404`.
+      schema:
+        type: integer
+      example: 2
+
+    AccountTypeId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Account type ID. An unknown, soft-deleted or non-numeric ID returns `404`. Account types of
+        other companies are not blocked.
+      schema:
+        type: integer
+      example: 4
 
   schemas:
     SuccessEnvelope:
@@ -3642,6 +4306,67 @@ components:
         limit (the size of the database column). Must be unique within the logged-in user's
         company (not case-sensitive, soft-deleted product types not counted).
       example: Semi Finished Good
+
+    BankAccount:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 2
+        company_id:
+          type: integer
+          description: "`0` for bank accounts created by the super admin."
+          example: 1
+        bank_name:
+          type: [string, "null"]
+          example: Dutch-Bangla Bank Limited (DBBL)
+        account_name:
+          type: [string, "null"]
+          example: Test Ltd
+        account_number:
+          type: [string, "null"]
+          example: "1234567890"
+        branch:
+          type: [string, "null"]
+          example: Motijheel
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2025-01-18T10:02:06.000000Z"
+
+    BankName:
+      type: string
+      minLength: 2
+      maxLength: 100
+      description: |
+        Rules come from the bank form settings (same as the web form). Must be unique within the
+        logged-in user's company (not case-sensitive, soft-deleted bank accounts not counted).
+      example: Test Bank Limited
+
+    AccountType:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 4
+        company_id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Income
+        status:
+          type: string
+          description: Plain string column; the API only sets `Approved` or `Inactive`.
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2025-01-18T10:02:09.000000Z"
 
     Decimal:
       type: [string, number]
@@ -4260,6 +4985,74 @@ components:
                 errors:
                   status:
                     - The selected status is invalid.
+
+    BankAccountNotFound:
+      description: No bank account with this ID in the logged-in user's company, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    BankAccountValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingName:
+              summary: Create only — bank name missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The bank name field is required. "
+                errors:
+                  bank_name:
+                    - The bank name field is required.
+            duplicateName:
+              summary: Bank name already used by another bank account of the company
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The bank name has already been taken. "
+                errors:
+                  bank_name:
+                    - The bank name has already been taken.
+            tooLong:
+              summary: A field is longer than its column
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The account name must not be greater than 100 characters. "
+                errors:
+                  account_name:
+                    - The account name must not be greater than 100 characters.
+            invalidStatus:
+              summary: Update only — status null or not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    AccountTypeNotFound:
+      description: No account type with this ID, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
 
     ValidationError:
       description: Request validation failed.
