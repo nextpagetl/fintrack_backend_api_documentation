@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.8.0
+  version: 1.9.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -45,7 +45,7 @@ info:
 
     ## Permissions
     Role, branch, store, division, district, department, customer group, supplier group, unit,
-    brand, product type, bank account and account type endpoints also need a Spatie permission, named
+    brand, product category, product type, bank account and account type endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -92,6 +92,8 @@ tags:
     description: Product unit management (Product Manage → Unit)
   - name: Brands
     description: Brand management (Product Manage → Brand)
+  - name: Product Categories
+    description: Product category management (Product Manage → Product Category)
   - name: Product Types
     description: Product type management (Product Manage → Product Type)
   - name: Bank Accounts
@@ -4634,6 +4636,471 @@ paths:
                   status:
                     - The selected status is invalid.
 
+  /product-categories:
+    get:
+      tags:
+        - Product Categories
+      summary: List product categories
+      description: |
+        Paginated list of product categories (API version of the web list
+        `admin/inventory-setup-category-list`). Categories are not filtered by company (unlike
+        the web list, which shows only the logged-in user's company). Soft-deleted categories
+        are not listed. Each category includes its parent's name (`parent_name`, `null` when it
+        has no parent or the parent is soft-deleted). The categories are in `data.items` and the
+        pagination info in `data.pagination`.
+
+        Required permission: `module:product-manage.menu:product-category.permission:view`
+      operationId: listProductCategories
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name, priority, status or parent name.
+          schema:
+            type: string
+          example: Textile
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, priority, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Product category list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/ProductCategory"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 3
+                      company_id: 1
+                      name: Dyeing
+                      parent_id: 1
+                      parent_name: Textile
+                      priority: 3
+                      status: Approved
+                      created_at: "2025-01-18T10:02:07.000000Z"
+                    - id: 1
+                      company_id: 1
+                      name: Textile
+                      parent_id: null
+                      parent_name: null
+                      priority: 1
+                      status: Approved
+                      created_at: "2025-01-18T10:02:07.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 2
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Product Categories
+      summary: Create product category
+      description: |
+        Creates a product category (API version of the web form
+        `admin/inventory-setup-category-create`). The validation rules are the same as the web
+        form, read from the category form settings, with these changes:
+
+        - `name` must be unique among categories that are not soft-deleted (not case-sensitive),
+          of any company. The web form does not check this.
+        - `parent_id`, when sent, must be the ID of a category that is not soft-deleted. Leave
+          it out or send `null` for a top-level category.
+        - `priority`, when sent, must be an integer.
+
+        `status` is always saved as `Approved` and `company_id` is set to the logged-in user's
+        company, even if other values are sent.
+
+        Required permission: `module:product-manage.menu:product-category.permission:create`
+      operationId: createProductCategory
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  $ref: "#/components/schemas/ProductCategoryName"
+                parent_id:
+                  $ref: "#/components/schemas/ProductCategoryParentId"
+                priority:
+                  $ref: "#/components/schemas/ProductCategoryPriority"
+            examples:
+              topLevel:
+                summary: Top-level category
+                value:
+                  name: Api Category
+                  priority: 5
+              child:
+                summary: Child of category 1
+                value:
+                  name: Api Child Category
+                  parent_id: 1
+
+      responses:
+        "201":
+          description: Product category created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ProductCategory"
+              example:
+                code: 201
+                success: true
+                message: Product category created successfully.
+                data:
+                  id: 11
+                  company_id: 1
+                  name: Api Category
+                  parent_id: null
+                  parent_name: null
+                  priority: 5
+                  status: Approved
+                  created_at: "2026-11-10T07:02:27.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/ProductCategoryValidationError"
+
+  /product-categories/{id}:
+    put:
+      tags:
+        - Product Categories
+      summary: Update product category
+      description: |
+        Updates a product category (API version of the web edit form
+        `admin/inventory-setup-category-edit/{id}`). This is a **partial update**: every field is
+        optional, and a field that is not sent keeps its current value.
+
+        - `status` is changed only when sent (`Approved`, `Inactive`, `Pending` or `Cancel`);
+          otherwise the category keeps its current status. (The web form always saves
+          `Approved`.)
+        - `name` must be unique among categories that are not soft-deleted (not
+          case-sensitive); the category's own name may be kept.
+        - `parent_id` cannot be the category itself or any of its child categories (at any
+          depth). Send `null` to make it a top-level category.
+        - `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:product-manage.menu:product-category.permission:edit`
+      operationId: updateProductCategory
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ProductCategoryId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: All fields are optional; send only what should change.
+              properties:
+                name:
+                  $ref: "#/components/schemas/ProductCategoryName"
+                parent_id:
+                  $ref: "#/components/schemas/ProductCategoryParentId"
+                priority:
+                  $ref: "#/components/schemas/ProductCategoryPriority"
+                status:
+                  type: string
+                  enum: [Approved, Inactive, Pending, Cancel]
+                  example: Inactive
+            examples:
+              nameOnly:
+                summary: Rename only
+                value:
+                  name: Api Category 2
+              moveToTopLevel:
+                summary: Remove the parent
+                value:
+                  parent_id: null
+              priorityAndStatus:
+                summary: Change priority and status
+                value:
+                  priority: 9
+                  status: Inactive
+
+      responses:
+        "200":
+          description: Product category updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ProductCategory"
+              example:
+                code: 200
+                success: true
+                message: Product category updated successfully.
+                data:
+                  id: 11
+                  company_id: 1
+                  name: Api Category
+                  parent_id: null
+                  parent_name: null
+                  priority: 9
+                  status: Inactive
+                  created_at: "2026-11-10T07:02:27.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/ProductCategoryNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/ProductCategoryValidationError"
+
+    delete:
+      tags:
+        - Product Categories
+      summary: Delete product category
+      description: |
+        Soft-deletes a product category (`deleted_at` is set; the row stays in the database). A
+        deleted category is no longer listed, returns `404` on every other endpoint, and its
+        name can be used again through the API.
+
+        The category cannot be deleted (`409`) when it is still used (`errors.used_in` lists
+        where):
+
+        - `products` — a product has this category (soft-deleted products are not counted)
+        - `stock_summaries` — a stock summary row has this category
+        - `booking_details` — a booking detail has this category (soft-deleted rows are not counted)
+        - `child_categories` — another category has this one as its parent
+
+        The web list only hides the delete button for categories used by products; the API
+        blocks the delete on the server.
+
+        Required permission: `module:product-manage.menu:product-category.permission:delete`
+      operationId: deleteProductCategory
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ProductCategoryId"
+
+      responses:
+        "200":
+          description: Product category deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 11
+              example:
+                code: 200
+                success: true
+                message: Product category deleted successfully.
+                data:
+                  id: 11
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/ProductCategoryNotFound"
+
+        "409":
+          description: The product category is still in use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Product category is in use and cannot be deleted.
+                errors:
+                  used_in: [products, stock_summaries, child_categories]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /product-categories/{id}/status:
+    patch:
+      tags:
+        - Product Categories
+      summary: Change product category status
+      description: |
+        Sets the product category's status to `Approved` or `Inactive`.
+
+        Required permission: `module:product-manage.menu:product-category.permission:change-status`
+      operationId: updateProductCategoryStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ProductCategoryId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ProductCategory"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 11
+                  company_id: 1
+                  name: Api Category
+                  parent_id: null
+                  parent_name: null
+                  priority: 5
+                  status: Inactive
+                  created_at: "2026-11-10T07:02:27.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/ProductCategoryNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
   /product-types:
     get:
       tags:
@@ -5795,6 +6262,17 @@ components:
         type: integer
       example: 6
 
+    ProductCategoryId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Product category ID. An unknown, soft-deleted or non-numeric ID returns `404`.
+        Categories are not filtered by company.
+      schema:
+        type: integer
+      example: 11
+
     UnitId:
       name: id
       in: path
@@ -6425,6 +6903,61 @@ components:
         limit (the size of the database column). Must be unique among brands that are not
         soft-deleted, of any company (not case-sensitive).
       example: Api Brand
+
+    ProductCategory:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 3
+        company_id:
+          type: integer
+          example: 1
+        name:
+          type: [string, "null"]
+          example: Dyeing
+        parent_id:
+          type: [integer, "null"]
+          description: ID of the parent category; `null` for a top-level category.
+          example: 1
+        parent_name:
+          type: [string, "null"]
+          description: Name of the parent category; `null` when there is no parent or it is soft-deleted.
+          example: Textile
+        priority:
+          type: [integer, "null"]
+          example: 3
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2025-01-18T10:02:07.000000Z"
+
+    ProductCategoryName:
+      type: string
+      minLength: 2
+      maxLength: 100
+      description: |
+        Rules come from the category form settings (same as the web form): required, 2–100
+        characters. Must be unique among categories that are not soft-deleted, of any company
+        (not case-sensitive).
+      example: Api Category
+
+    ProductCategoryParentId:
+      type: [integer, "null"]
+      description: |
+        ID of the parent category (a category that is not soft-deleted). `null` or not sent
+        means a top-level category. On update it cannot be the category itself or one of its
+        child categories.
+      example: 1
+
+    ProductCategoryPriority:
+      type: [integer, "null"]
+      description: Display order of the category.
+      example: 5
 
     ProductType:
       type: object
@@ -7276,6 +7809,71 @@ components:
                 errors:
                   name:
                     - The name has already been taken.
+            invalidStatus:
+              summary: Update only — status not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    ProductCategoryNotFound:
+      description: No product category with this ID, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    ProductCategoryValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingName:
+              summary: Create only — name not sent
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+            duplicateName:
+              summary: Name already used by another category
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken. "
+                errors:
+                  name:
+                    - The name has already been taken.
+            invalidParent:
+              summary: parent_id is not an existing category
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected parent id is invalid. "
+                errors:
+                  parent_id:
+                    - The selected parent id is invalid.
+            parentLoop:
+              summary: Update only — parent_id is the category itself or one of its children
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The parent category cannot be this category or one of its child categories. "
+                errors:
+                  parent_id:
+                    - The parent category cannot be this category or one of its child categories.
             invalidStatus:
               summary: Update only — status not Approved / Inactive / Pending / Cancel
               value:
