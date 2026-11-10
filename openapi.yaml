@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.9.0
+  version: 1.10.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -44,7 +44,7 @@ info:
     `exception`, `file`, `line` and `trace`. Production must run with `APP_DEBUG=false`.
 
     ## Permissions
-    Role, branch, store, division, district, department, customer group, supplier group, unit,
+    Role, branch, store, division, district, department, customer group, customer media, supplier group, unit,
     brand, product category, product type, bank account and account type endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
@@ -86,6 +86,8 @@ tags:
     description: Department management (Settings → Department)
   - name: Customer Groups
     description: Customer group management (Customer Manage → Customer Group)
+  - name: Customer Media
+    description: Customer media (customer source) management (Customer Manage → Customer Media)
   - name: Supplier Groups
     description: Supplier group management (Supplier Manage → Supplier Group)
   - name: Units
@@ -3421,6 +3423,406 @@ paths:
                   status:
                     - The selected status is invalid.
 
+  /customer-media:
+    get:
+      tags:
+        - Customer Media
+      summary: List customer media
+      description: |
+        Paginated list of the logged-in user's company customer media — the sources a customer can
+        come from, saved in `customers.media_id` (the same company filter as the web list
+        `admin/sales-setup-customer-media-list`; this also applies to the super admin).
+        Soft-deleted customer media are not listed. The customer media are in `data.items` and the
+        pagination info in `data.pagination`.
+
+        Required permission: `module:customer-manage.menu:customer-media.permission:view`
+      operationId: listCustomerMedia
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name or status.
+          schema:
+            type: string
+          example: Office
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Customer media list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/CustomerMedia"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 1
+                      company_id: 1
+                      name: Office
+                      status: Approved
+                      created_at: "2025-01-18T10:02:07.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 1
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Customer Media
+      summary: Create customer media
+      description: |
+        Creates a customer media for the logged-in user's company. The validation rules are the same
+        as the web form (`admin/sales-setup-customer-media-create`), read from the customer media form
+        settings.
+
+        - `status` is always saved as `Approved`, even if another value is sent.
+        - `name` must be unique in the **whole table** — across all companies, and soft-deleted
+          customer media are counted too (not case-sensitive). The `customer_media.name` column
+          has a unique index, so the name of a deleted customer media cannot be used again.
+
+        Required permission: `module:customer-manage.menu:customer-media.permission:create`
+      operationId: createCustomerMedia
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  $ref: "#/components/schemas/CustomerMediaName"
+
+      responses:
+        "201":
+          description: Customer media created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CustomerMedia"
+              example:
+                code: 201
+                success: true
+                message: Customer media created successfully.
+                data:
+                  id: 2
+                  company_id: 1
+                  name: Facebook
+                  status: Approved
+                  created_at: "2026-11-10T08:00:18.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/CustomerMediaValidationError"
+
+  /customer-media/{id}:
+    put:
+      tags:
+        - Customer Media
+      summary: Update customer media
+      description: |
+        Updates a customer media's name and status (API version of the web edit form
+        `admin/sales-setup-customer-media-edit/{id}`). This is a **full update**: both `name` and
+        `status` are required; a request without one of them returns `422` and nothing is saved.
+
+        - `name` must be unique in the whole table (all companies, soft-deleted customer media
+          included, not case-sensitive); the customer media's own name may be kept.
+        - `status` is taken from the body (`Approved`, `Inactive`, `Pending` or `Cancel`). (The
+          web form always saves `Approved`.)
+        - `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:customer-manage.menu:customer-media.permission:edit`
+      operationId: updateCustomerMedia
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CustomerMediaId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - status
+              properties:
+                name:
+                  $ref: "#/components/schemas/CustomerMediaName"
+                status:
+                  type: string
+                  enum: [Approved, Inactive, Pending, Cancel]
+                  example: Pending
+
+      responses:
+        "200":
+          description: Customer media updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CustomerMedia"
+              example:
+                code: 200
+                success: true
+                message: Customer media updated successfully.
+                data:
+                  id: 2
+                  company_id: 1
+                  name: Facebook
+                  status: Pending
+                  created_at: "2026-11-10T08:00:18.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/CustomerMediaNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/CustomerMediaValidationError"
+
+    delete:
+      tags:
+        - Customer Media
+      summary: Delete customer media
+      description: |
+        Soft-deletes a customer media (`deleted_at` is set; the row stays in the database). A
+        deleted customer media is no longer listed and returns `404` on every other endpoint. Its
+        name **cannot** be used again (see the unique rule on create).
+
+        The customer media cannot be deleted (`409`) when any customer uses it
+        (`customers.media_id`; soft-deleted customers are not counted). The web list checks a
+        different column (`customers.customer_type`) to hide the delete button; the API checks
+        `media_id` and blocks the delete on the server.
+
+        Required permission: `module:customer-manage.menu:customer-media.permission:delete`
+      operationId: deleteCustomerMedia
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CustomerMediaId"
+
+      responses:
+        "200":
+          description: Customer media deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 2
+              example:
+                code: 200
+                success: true
+                message: Customer media deleted successfully.
+                data:
+                  id: 2
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/CustomerMediaNotFound"
+
+        "409":
+          description: The customer media is still used by customers.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Customer media is in use and cannot be deleted.
+                errors:
+                  used_in: [customers]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /customer-media/{id}/status:
+    patch:
+      tags:
+        - Customer Media
+      summary: Change customer media status
+      description: |
+        Sets the customer media's status to `Approved` or `Inactive`.
+
+        Required permission: `module:customer-manage.menu:customer-media.permission:change-status`
+      operationId: updateCustomerMediaStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CustomerMediaId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CustomerMedia"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 2
+                  company_id: 1
+                  name: Facebook
+                  status: Inactive
+                  created_at: "2026-11-10T08:00:18.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/CustomerMediaNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
   /supplier-groups:
     get:
       tags:
@@ -6240,6 +6642,17 @@ components:
         type: integer
       example: 2
 
+    CustomerMediaId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Customer media ID. An unknown, soft-deleted or non-numeric ID, or a customer media of another
+        company, returns `404`.
+      schema:
+        type: integer
+      example: 2
+
     SupplierGroupId:
       name: id
       in: path
@@ -6808,6 +7221,37 @@ components:
         limit (the size of the database column). Must be unique within the logged-in user's
         company (not case-sensitive, soft-deleted customer groups not counted).
       example: Wholesale Partner
+
+    CustomerMedia:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        company_id:
+          type: integer
+          example: 1
+        name:
+          type: [string, "null"]
+          example: Office
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2025-01-18T10:02:07.000000Z"
+
+    CustomerMediaName:
+      type: string
+      minLength: 2
+      maxLength: 100
+      description: |
+        Rules come from the customer media form settings (same as the web form): required, 2–100
+        characters. Must be unique in the whole table — all companies, soft-deleted customer media
+        included (not case-sensitive) — because `customer_media.name` has a unique index.
+      example: Facebook
 
     SupplierGroup:
       type: object
@@ -7670,6 +8114,71 @@ components:
                     - The name has already been taken.
             invalidStatus:
               summary: Update only — status missing or not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    CustomerMediaNotFound:
+      description: No customer media with this ID in the logged-in user's company, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    CustomerMediaValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingName:
+              summary: Name missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+            shortName:
+              summary: Name shorter than 2 characters
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name must be at least 2 characters. "
+                errors:
+                  name:
+                    - The name must be at least 2 characters.
+            duplicateName:
+              summary: Name already used (any company, including deleted customer media)
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken. "
+                errors:
+                  name:
+                    - The name has already been taken.
+            missingStatus:
+              summary: Update only — status missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The status field is required. "
+                errors:
+                  status:
+                    - The status field is required.
+            invalidStatus:
+              summary: Update only — status not Approved / Inactive / Pending / Cancel
               value:
                 code: 422
                 success: false
