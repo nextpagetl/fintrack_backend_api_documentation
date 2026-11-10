@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.10.0
+  version: 1.11.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -45,7 +45,7 @@ info:
 
     ## Permissions
     Role, branch, store, division, district, department, customer group, customer media, supplier group, unit,
-    brand, product category, product type, bank account and account type endpoints also need a Spatie permission, named
+    brand, product category, product type, bank account, account type and pay head config endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -102,6 +102,8 @@ tags:
     description: Bank account management (Accounts Setup → Bank)
   - name: Account Types
     description: Account type list and status (Accounts Setup → Account Type)
+  - name: Pay Head Config
+    description: Payment type management (Accounts Setup → Pay Head Config.)
 
 paths:
   /csrf-token:
@@ -6548,6 +6550,494 @@ paths:
                   status:
                     - The selected status is invalid.
 
+  /pay-head-configs:
+    get:
+      tags:
+        - Pay Head Config
+      summary: List pay head configs
+      description: |
+        Paginated list of payment types (API version of the web list
+        `admin/account-setup-payment-type-list`). Like the web list, payment types are **not
+        filtered by company**: the built-in Cash, Credit and Bank have `company_id` `0` and are
+        shared. Soft-deleted payment types are not listed. The payment types are in `data.items`
+        and the pagination info in `data.pagination`.
+
+        Sales, purchases, returns and payment forms list these payment types, and their
+        transactions save the payment type **name** (for example `sale_payments.payment_type =
+        "Bank"`), not its ID.
+
+        Required permission: `module:accounts-setup.menu:pay-head-config.permission:view`
+      operationId: listPayHeadConfigs
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name, note or status.
+          schema:
+            type: string
+          example: Bank
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, status, is_default, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Pay head config list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/PayHeadConfig"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 4
+                      company_id: 1
+                      name: Mobile Banking
+                      account_id: 57
+                      default_account_id: 58
+                      note: BKash or Nagged
+                      status: Approved
+                      is_default: "NO"
+                      created_at: "2025-01-19T09:37:54.000000Z"
+                    - id: 3
+                      company_id: 0
+                      name: Bank
+                      account_id: 6
+                      default_account_id: null
+                      note: Cash at Bank
+                      status: Approved
+                      is_default: "Yes"
+                      created_at: "2025-01-18T10:02:10.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 2
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Pay Head Config
+      summary: Create pay head config
+      description: |
+        Creates a payment type (API version of the web form `admin/account-setup-payment-type-create`).
+
+        - `name` is required, 2–55 characters (the size of the database column) and must be
+          unique among payment types that are not soft-deleted (not case-sensitive).
+        - `account_id` is required: a ledger parent account of the chart of accounts
+          (`is_posted = 0`, not soft-deleted), the same list as the web form's **Account** dropdown.
+        - `default_account_id` is optional: a posted ledger account (`is_posted = 1`) that is a
+          **child of `account_id`**.
+        - `status` is always saved as `Approved`, `is_default` stays `NO`, and `company_id` is set
+          to the logged-in user's company.
+
+        Required permission: `module:accounts-setup.menu:pay-head-config.permission:create`
+      operationId: createPayHeadConfig
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - account_id
+              properties:
+                name:
+                  $ref: "#/components/schemas/PayHeadConfigName"
+                account_id:
+                  $ref: "#/components/schemas/PayHeadConfigAccountId"
+                default_account_id:
+                  $ref: "#/components/schemas/PayHeadConfigDefaultAccountId"
+                note:
+                  $ref: "#/components/schemas/PayHeadConfigNote"
+            example:
+              name: Mobile Banking
+              account_id: 57
+              default_account_id: 58
+              note: BKash or Nagad
+
+      responses:
+        "201":
+          description: Pay head config created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PayHeadConfig"
+              example:
+                code: 201
+                success: true
+                message: Pay head config created successfully.
+                data:
+                  id: 8
+                  company_id: 1
+                  name: Nagad
+                  account_id: 57
+                  default_account_id: 58
+                  note: test
+                  status: Approved
+                  is_default: "NO"
+                  created_at: "2026-11-10T09:10:39.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/PayHeadConfigValidationError"
+
+  /pay-head-configs/{id}:
+    put:
+      tags:
+        - Pay Head Config
+      summary: Update pay head config
+      description: |
+        Updates a payment type (API version of the web edit form
+        `admin/account-setup-payment-type-edit/{id}`). This is a **partial update**: every field is
+        optional, and a field that is not sent keeps its current value.
+
+        - `name` uses the same rules as create; the payment type's own name may be kept.
+          Because transactions store the payment type name, the name **cannot be changed**
+          (`422`) when the payment type is a default one (`is_default = Yes`: Cash, Credit, Bank)
+          or when any transaction uses it.
+        - `account_id` / `default_account_id` use the same rules as create. The "default account
+          must be a child of the account" check runs only when one of the two is sent, so other
+          fields of an existing record can be edited even if its saved pair does not follow the
+          rule. Send `default_account_id: null` to clear it.
+        - `status` is changed only when sent (`Approved`, `Inactive`, `Pending` or `Cancel`).
+        - `company_id` is set to the logged-in user's company (same as the web form).
+
+        Required permission: `module:accounts-setup.menu:pay-head-config.permission:edit`
+      operationId: updatePayHeadConfig
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/PayHeadConfigId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: All fields are optional; send only what should change.
+              properties:
+                name:
+                  $ref: "#/components/schemas/PayHeadConfigName"
+                account_id:
+                  $ref: "#/components/schemas/PayHeadConfigAccountId"
+                default_account_id:
+                  $ref: "#/components/schemas/PayHeadConfigDefaultAccountId"
+                note:
+                  $ref: "#/components/schemas/PayHeadConfigNote"
+                status:
+                  type: string
+                  enum: [Approved, Inactive, Pending, Cancel]
+                  example: Pending
+            examples:
+              noteOnly:
+                summary: Change only the note
+                value:
+                  note: BKash or Nagad
+              clearDefaultAccount:
+                summary: Remove the default account
+                value:
+                  default_account_id: null
+              accounts:
+                summary: Change both accounts
+                value:
+                  account_id: 57
+                  default_account_id: 58
+
+      responses:
+        "200":
+          description: Pay head config updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PayHeadConfig"
+              example:
+                code: 200
+                success: true
+                message: Pay head config updated successfully.
+                data:
+                  id: 4
+                  company_id: 1
+                  name: Mobile Banking
+                  account_id: 57
+                  default_account_id: 58
+                  note: BKash or Nagad
+                  status: Approved
+                  is_default: "NO"
+                  created_at: "2025-01-19T09:37:54.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PayHeadConfigNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/PayHeadConfigValidationError"
+
+    delete:
+      tags:
+        - Pay Head Config
+      summary: Delete pay head config
+      description: |
+        Soft-deletes a payment type (`deleted_at` is set; the row stays in the database). A
+        deleted payment type is no longer listed in the API, the web list or the sales / purchase
+        form dropdowns, returns `404` on every other endpoint, and its name can be used again.
+
+        The payment type cannot be deleted (`409`) when:
+
+        - it is a default one (`is_default = Yes`: Cash, Credit, Bank), or
+        - any transaction stores its name (`errors.used_in` lists the tables). Checked tables:
+          `sales`, `sale_payments`, `sale_payment_details`, `sale_returns`,
+          `sale_return_wihout_refs`, `purchases`, `purchases_payments`,
+          `purchases_payment_details`, `purchases_returns`, `purchases_mrrs`, `pos`, `inovices`,
+          `bookings`, `service_invoices`, `service_payments`, `sale_commission_payments`
+          (soft-deleted rows are not counted).
+
+        The web list only hides the delete button for default payment types; the API also
+        blocks used ones.
+
+        Required permission: `module:accounts-setup.menu:pay-head-config.permission:delete`
+      operationId: deletePayHeadConfig
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/PayHeadConfigId"
+
+      responses:
+        "200":
+          description: Pay head config deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 8
+              example:
+                code: 200
+                success: true
+                message: Pay head config deleted successfully.
+                data:
+                  id: 8
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PayHeadConfigNotFound"
+
+        "409":
+          description: The payment type is a default one or is used by transactions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                defaultType:
+                  summary: Default payment type
+                  value:
+                    code: 409
+                    success: false
+                    message: A default pay head config cannot be deleted.
+                    errors:
+                      is_default: "Yes"
+                inUse:
+                  summary: Used by transactions
+                  value:
+                    code: 409
+                    success: false
+                    message: Pay head config is in use and cannot be deleted.
+                    errors:
+                      used_in: [sale_payments, sale_payment_details]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /pay-head-configs/{id}/status:
+    patch:
+      tags:
+        - Pay Head Config
+      summary: Change pay head config status
+      description: |
+        Sets the payment type's status to `Approved` or `Inactive`.
+
+        Note: the sales / purchase form dropdowns do not check the status, so an `Inactive`
+        payment type is still listed there (same as the web).
+
+        Required permission: `module:accounts-setup.menu:pay-head-config.permission:change-status`
+      operationId: updatePayHeadConfigStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/PayHeadConfigId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PayHeadConfig"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 7
+                  company_id: 1
+                  name: Employee Reserve
+                  account_id: 182
+                  default_account_id: null
+                  note: Employee Reserve
+                  status: Inactive
+                  is_default: "NO"
+                  created_at: "2026-10-27T11:50:56.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PayHeadConfigNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
 components:
   securitySchemes:
     sessionCookie:
@@ -6726,6 +7216,17 @@ components:
       description: |
         Account type ID. An unknown, soft-deleted or non-numeric ID returns `404`. Account types of
         other companies are not blocked.
+      schema:
+        type: integer
+      example: 4
+
+    PayHeadConfigId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Payment type ID. An unknown, soft-deleted or non-numeric ID returns `404`. Payment types
+        are not filtered by company.
       schema:
         type: integer
       example: 4
@@ -7495,6 +7996,73 @@ components:
           type: [string, "null"]
           format: date-time
           example: "2025-01-18T10:02:09.000000Z"
+
+    PayHeadConfig:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 4
+        company_id:
+          type: integer
+          description: "`0` for the built-in Cash, Credit and Bank."
+          example: 1
+        name:
+          type: [string, "null"]
+          description: Saved as text in the transactions that use this payment type.
+          example: Mobile Banking
+        account_id:
+          type: [integer, "null"]
+          description: Chart of accounts ID (ledger parent). `null` for Credit.
+          example: 57
+        default_account_id:
+          type: [integer, "null"]
+          description: Chart of accounts ID of the default posted ledger.
+          example: 58
+        note:
+          type: [string, "null"]
+          example: BKash or Nagged
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        is_default:
+          type: [string, "null"]
+          enum: ["Yes", "NO", null]
+          description: "`Yes` for the built-in payment types, which cannot be renamed or deleted."
+          example: "NO"
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2025-01-19T09:37:54.000000Z"
+
+    PayHeadConfigName:
+      type: string
+      minLength: 2
+      maxLength: 55
+      description: |
+        2–55 characters (the size of the database column). Must be unique among payment types
+        that are not soft-deleted (not case-sensitive).
+      example: Mobile Banking
+
+    PayHeadConfigAccountId:
+      type: integer
+      description: |
+        Chart of accounts ID of a ledger parent account (`is_posted = 0`, not soft-deleted) — the
+        web form's **Account** dropdown.
+      example: 57
+
+    PayHeadConfigDefaultAccountId:
+      type: [integer, "null"]
+      description: |
+        Chart of accounts ID of a posted ledger account (`is_posted = 1`, not soft-deleted) whose
+        parent is `account_id` — the web form's **Default Account** dropdown.
+      example: 58
+
+    PayHeadConfigNote:
+      type: [string, "null"]
+      maxLength: 255
+      example: BKash or Nagad
 
     Decimal:
       type: [string, number]
@@ -8507,6 +9075,109 @@ components:
             success: false
             message: Not Found
             errors: Data Not Found
+
+    PayHeadConfigNotFound:
+      description: No payment type with this ID, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    PayHeadConfigValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingFields:
+              summary: Create only — name and account missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. The account id field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+                  account_id:
+                    - The account id field is required.
+            longName:
+              summary: Name longer than 55 characters
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name must not be greater than 55 characters. "
+                errors:
+                  name:
+                    - The name must not be greater than 55 characters.
+            duplicateName:
+              summary: Name already used by another payment type
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken. "
+                errors:
+                  name:
+                    - The name has already been taken.
+            invalidAccount:
+              summary: account_id is not a ledger parent account
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected account id is invalid. "
+                errors:
+                  account_id:
+                    - The selected account id is invalid.
+            invalidDefaultAccount:
+              summary: default_account_id is not a posted ledger account
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected default account id is invalid. "
+                errors:
+                  default_account_id:
+                    - The selected default account id is invalid.
+            defaultAccountNotChild:
+              summary: default_account_id is not a child of account_id
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The default account must be a child account of the selected account. "
+                errors:
+                  default_account_id:
+                    - The default account must be a child account of the selected account.
+            renameDefault:
+              summary: Update only — renaming a default payment type
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name of a default pay head config cannot be changed. "
+                errors:
+                  name:
+                    - The name of a default pay head config cannot be changed.
+            renameUsed:
+              summary: Update only — renaming a payment type used by transactions
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name cannot be changed because transactions use this pay head config. "
+                errors:
+                  name:
+                    - The name cannot be changed because transactions use this pay head config.
+            invalidStatus:
+              summary: Update only — status not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
 
     ValidationError:
       description: Request validation failed.
