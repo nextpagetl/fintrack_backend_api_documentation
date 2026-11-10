@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.14.0
+  version: 1.15.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -45,7 +45,7 @@ info:
 
     ## Permissions
     Role, branch, store, division, district, department, customer group, customer media, supplier group, unit,
-    brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason and inventory adjustment reason endpoints also need a Spatie permission, named
+    brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason, inventory adjustment reason and cost center endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -110,6 +110,8 @@ tags:
     description: Credit note reason management (Accounts Setup → Credit Note Reason)
   - name: Inventory Adjustment Reasons
     description: Inventory adjustment reason management (Accounts Setup → Inventory Adjustment Reason)
+  - name: Cost Centers
+    description: Cost center management (Manufacturing Setup → Cost Center)
 
 paths:
   /csrf-token:
@@ -8405,6 +8407,418 @@ paths:
                   status:
                     - The selected status is invalid.
 
+  /cost-centers:
+    get:
+      tags:
+        - Cost Centers
+      summary: List cost centers
+      description: |
+        Paginated list of cost centers (API version of the web list
+        `admin/manufacturing-setup-cost-center-list`). BOMs and WIPs are assigned to a cost center.
+        Cost centers are **not filtered by company** (unlike the web list, which shows only the
+        logged-in user's company). Soft-deleted cost centers are not listed. The cost centers are
+        in `data.items` and the pagination info in `data.pagination`.
+
+        Required permission: `module:manufacturing-setup.menu:cost-center.permission:view`
+      operationId: listCostCenters
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name or status.
+          schema:
+            type: string
+          example: Center
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Cost center list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/CostCenter"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 1
+                      company_id: 1
+                      name: Cost Center 1
+                      status: Approved
+                      created_at: "2026-01-01T00:45:50.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 1
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Cost Centers
+      summary: Create cost center
+      description: |
+        Creates a cost center (API version of the web form `admin/manufacturing-setup-cost-center-create`).
+
+        - `name` is required, 2–100 characters (the size of the database column) and must be
+          unique among cost centers that are not soft-deleted, of any company (not
+          case-sensitive). The web form also counts soft-deleted cost centers.
+        - `status` is always saved as `Approved` and `company_id` is set to the logged-in user's
+          company.
+
+        Required permission: `module:manufacturing-setup.menu:cost-center.permission:create`
+      operationId: createCostCenter
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  $ref: "#/components/schemas/CostCenterName"
+
+      responses:
+        "201":
+          description: Cost center created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CostCenter"
+              example:
+                code: 201
+                success: true
+                message: Cost center created successfully.
+                data:
+                  id: 3
+                  company_id: 1
+                  name: Finishing Unit
+                  status: Approved
+                  created_at: "2026-11-10T10:38:36.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/CostCenterValidationError"
+
+  /cost-centers/{id}:
+    put:
+      tags:
+        - Cost Centers
+      summary: Update cost center
+      description: |
+        Updates a cost center (API version of the web edit form
+        `admin/manufacturing-setup-cost-center-edit/{id}`). This is a **partial update**: `name` and
+        `status` are both optional, and a field that is not sent keeps its current value. If
+        validation fails, nothing is saved.
+
+        - `name` uses the same rules as create; the cost center's own name may be kept.
+        - `status` is changed only when sent (`Approved`, `Inactive`, `Pending` or `Cancel`).
+          (The web form always saves `Approved`.)
+        - `company_id` is set to the logged-in user's company (same as the web form). Because
+          cost centers are not filtered by company, updating another company's cost center moves
+          it to the logged-in user's company.
+
+        Required permission: `module:manufacturing-setup.menu:cost-center.permission:edit`
+      operationId: updateCostCenter
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CostCenterId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: All fields are optional; send only what should change.
+              properties:
+                name:
+                  $ref: "#/components/schemas/CostCenterName"
+                status:
+                  type: string
+                  enum: [Approved, Inactive, Pending, Cancel]
+                  example: Pending
+            examples:
+              nameOnly:
+                summary: Rename only (status is kept)
+                value:
+                  name: Finishing Unit 2
+              statusOnly:
+                summary: Change only the status (name is kept)
+                value:
+                  status: Pending
+
+      responses:
+        "200":
+          description: Cost center updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CostCenter"
+              example:
+                code: 200
+                success: true
+                message: Cost center updated successfully.
+                data:
+                  id: 3
+                  company_id: 1
+                  name: Finishing Unit 2
+                  status: Pending
+                  created_at: "2026-11-10T10:38:36.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/CostCenterNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/CostCenterValidationError"
+
+    delete:
+      tags:
+        - Cost Centers
+      summary: Delete cost center
+      description: |
+        Soft-deletes a cost center (`deleted_at` is set; the row stays in the database). A deleted
+        cost center is no longer listed, returns `404` on every other endpoint, and its name can be
+        used again.
+
+        The cost center cannot be deleted (`409`) when any BOM or WIP uses it (`boms.cost_center_id`,
+        `wips.cost_center_id`; soft-deleted rows are not counted). `errors.used_in` lists which.
+        The web list's usage check is commented out, so it never shows a delete button; the API
+        allows deleting unused cost centers.
+
+        Required permission: `module:manufacturing-setup.menu:cost-center.permission:delete`
+      operationId: deleteCostCenter
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CostCenterId"
+
+      responses:
+        "200":
+          description: Cost center deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 3
+              example:
+                code: 200
+                success: true
+                message: Cost center deleted successfully.
+                data:
+                  id: 3
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/CostCenterNotFound"
+
+        "409":
+          description: The cost center is still used by BOMs or WIPs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Cost center is in use and cannot be deleted.
+                errors:
+                  used_in: [boms, wips]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /cost-centers/{id}/status:
+    patch:
+      tags:
+        - Cost Centers
+      summary: Change cost center status
+      description: |
+        Sets the cost center's status to `Approved` or `Inactive`. Only the status changes; the
+        name and `company_id` stay as they are.
+
+        The BOM and WIP form dropdowns list only `Approved` cost centers, so an `Inactive` cost
+        center cannot be picked for new BOMs / WIPs. Existing BOMs and WIPs keep their cost center.
+
+        Required permission: `module:manufacturing-setup.menu:cost-center.permission:change-status`
+      operationId: updateCostCenterStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CostCenterId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CostCenter"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 1
+                  company_id: 1
+                  name: Cost Center 1
+                  status: Inactive
+                  created_at: "2026-01-01T00:45:50.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/CostCenterNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`; nothing is saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
 components:
   securitySchemes:
     sessionCookie:
@@ -8630,6 +9044,17 @@ components:
       schema:
         type: integer
       example: 3
+
+    CostCenterId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Cost center ID. An unknown, soft-deleted or non-numeric ID returns `404`. Cost centers are
+        not filtered by company.
+      schema:
+        type: integer
+      example: 1
 
   schemas:
     SuccessEnvelope:
@@ -9609,6 +10034,36 @@ components:
       enum: [In, Out]
       description: Stock direction — the web form's Adjustment Type dropdown (setup data type 21).
       example: Out
+
+    CostCenter:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        company_id:
+          type: integer
+          example: 1
+        name:
+          type: [string, "null"]
+          example: Cost Center 1
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2026-01-01T00:45:50.000000Z"
+
+    CostCenterName:
+      type: string
+      minLength: 2
+      maxLength: 100
+      description: |
+        2–100 characters (the size of the database column). Must be unique among cost centers that
+        are not soft-deleted, of any company (not case-sensitive).
+      example: Finishing Unit
 
     Decimal:
       type: [string, number]
@@ -10704,6 +11159,71 @@ components:
                 errors:
                   credit_id:
                     - The credit account must be different from the debit account.
+            invalidStatus:
+              summary: Update only — status not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    CostCenterNotFound:
+      description: No cost center with this ID, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    CostCenterValidationError:
+      description: Request validation failed; nothing is saved.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingName:
+              summary: Create only — name missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+            shortName:
+              summary: Name shorter than 2 characters
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name must be at least 2 characters. "
+                errors:
+                  name:
+                    - The name must be at least 2 characters.
+            longName:
+              summary: Name longer than 100 characters
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name must not be greater than 100 characters. "
+                errors:
+                  name:
+                    - The name must not be greater than 100 characters.
+            duplicateName:
+              summary: Name already used by another cost center (any company)
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken. "
+                errors:
+                  name:
+                    - The name has already been taken.
             invalidStatus:
               summary: Update only — status not Approved / Inactive / Pending / Cancel
               value:
