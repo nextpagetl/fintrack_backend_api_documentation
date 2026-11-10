@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.13.0
+  version: 1.14.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -45,7 +45,7 @@ info:
 
     ## Permissions
     Role, branch, store, division, district, department, customer group, customer media, supplier group, unit,
-    brand, product category, product type, bank account, account type, pay head config, debit note reason and credit note reason endpoints also need a Spatie permission, named
+    brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason and inventory adjustment reason endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -108,6 +108,8 @@ tags:
     description: Debit note reason management (Accounts Setup → Debit Note Reason)
   - name: Credit Note Reasons
     description: Credit note reason management (Accounts Setup → Credit Note Reason)
+  - name: Inventory Adjustment Reasons
+    description: Inventory adjustment reason management (Accounts Setup → Inventory Adjustment Reason)
 
 paths:
   /csrf-token:
@@ -7940,6 +7942,469 @@ paths:
                   status:
                     - The selected status is invalid.
 
+  /inventory-adjustment-reasons:
+    get:
+      tags:
+        - Inventory Adjustment Reasons
+      summary: List inventory adjustment reasons
+      description: |
+        Paginated list of inventory adjustment reasons (API version of the web list
+        `admin/account-setup-inventory-adjustment-reason-list`). Each reason gives the stock
+        direction (`adjustment_type`: `In` or `Out`) and the debit and credit ledger accounts used
+        for an inventory adjustment's journal. Like the web list, reasons are **not filtered by
+        company**. Soft-deleted reasons are not listed. The reasons are in `data.items` and the
+        pagination info in `data.pagination`.
+
+        Required permission: `module:accounts-setup.menu:inventory-adjustment-reason.permission:view`
+      operationId: listInventoryAdjustmentReasons
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name, adjustment type or status.
+          schema:
+            type: string
+          example: Damage
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, adjustment_type, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Inventory adjustment reason list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/InventoryAdjustmentReason"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 2
+                      company_id: 1
+                      name: Over Adjusted
+                      debit_id: 9
+                      credit_id: 206
+                      adjustment_type: In
+                      status: Approved
+                      created_at: "2025-01-23T07:52:35.000000Z"
+                    - id: 1
+                      company_id: 1
+                      name: Goods Damage
+                      debit_id: 202
+                      credit_id: 9
+                      adjustment_type: Out
+                      status: Approved
+                      created_at: "2025-01-23T07:48:18.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 2
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Inventory Adjustment Reasons
+      summary: Create inventory adjustment reason
+      description: |
+        Creates an inventory adjustment reason (API version of the web form
+        `admin/account-setup-inventory-adjustment-reason-create`).
+
+        - `name` is required, 2–55 characters (the size of the database column) and must be
+          unique among reasons that are not soft-deleted (not case-sensitive). The web form does
+          not check this.
+        - `debit_id` and `credit_id` are required: posted ledger accounts of the chart of
+          accounts (`is_posted = 1`, not soft-deleted), the same list as the web form dropdowns.
+          They must be different accounts.
+        - `adjustment_type` is required: `In` or `Out` (the web form's Adjustment Type dropdown).
+        - `status` is always saved as `Approved` and `company_id` is set to the logged-in user's
+          company. The adjustment journal looks the reason up within the logged-in user's company.
+
+        Required permission: `module:accounts-setup.menu:inventory-adjustment-reason.permission:create`
+      operationId: createInventoryAdjustmentReason
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - debit_id
+                - credit_id
+                - adjustment_type
+              properties:
+                name:
+                  $ref: "#/components/schemas/InventoryAdjustmentReasonName"
+                debit_id:
+                  $ref: "#/components/schemas/InventoryAdjustmentReasonAccountId"
+                credit_id:
+                  $ref: "#/components/schemas/InventoryAdjustmentReasonAccountId"
+                adjustment_type:
+                  $ref: "#/components/schemas/InventoryAdjustmentType"
+            example:
+              name: Goods Damage
+              debit_id: 202
+              credit_id: 9
+              adjustment_type: Out
+
+      responses:
+        "201":
+          description: Inventory adjustment reason created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/InventoryAdjustmentReason"
+              example:
+                code: 201
+                success: true
+                message: Inventory adjustment reason created successfully.
+                data:
+                  id: 5
+                  company_id: 1
+                  name: Stock Found
+                  debit_id: 9
+                  credit_id: 206
+                  adjustment_type: In
+                  status: Approved
+                  created_at: "2026-11-10T09:52:09.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/InventoryAdjustmentReasonValidationError"
+
+        "500":
+          $ref: "#/components/responses/InventoryAdjustmentReasonSaveFailed"
+
+  /inventory-adjustment-reasons/{id}:
+    put:
+      tags:
+        - Inventory Adjustment Reasons
+      summary: Update inventory adjustment reason
+      description: |
+        Updates an inventory adjustment reason (API version of the web edit form
+        `admin/account-setup-inventory-adjustment-reason-edit/{id}`). This is a **partial update**:
+        every field is optional, and a field that is not sent keeps its current value.
+
+        - `name`, `debit_id`, `credit_id` and `adjustment_type` use the same rules as create; the
+          reason's own name may be kept. The "debit and credit must be different" check runs only
+          when one of the two accounts is sent.
+        - `status` is changed only when sent (`Approved`, `Inactive`, `Pending` or `Cancel`).
+        - Inventory adjustments store the reason **ID**, so a used reason can be renamed. Changing
+          its accounts affects only adjustments posted afterwards.
+        - `company_id` is set to the logged-in user's company (same as the web form).
+
+        Note: the web edit form never saves (its repository writes a `type` column that the table
+        does not have); this endpoint saves the fields above directly and works.
+
+        Required permission: `module:accounts-setup.menu:inventory-adjustment-reason.permission:edit`
+      operationId: updateInventoryAdjustmentReason
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/InventoryAdjustmentReasonId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: All fields are optional; send only what should change.
+              properties:
+                name:
+                  $ref: "#/components/schemas/InventoryAdjustmentReasonName"
+                debit_id:
+                  $ref: "#/components/schemas/InventoryAdjustmentReasonAccountId"
+                credit_id:
+                  $ref: "#/components/schemas/InventoryAdjustmentReasonAccountId"
+                adjustment_type:
+                  $ref: "#/components/schemas/InventoryAdjustmentType"
+                status:
+                  type: string
+                  enum: [Approved, Inactive, Pending, Cancel]
+                  example: Pending
+            examples:
+              nameOnly:
+                summary: Rename only
+                value:
+                  name: Goods Damage (Warehouse)
+              typeAndStatus:
+                summary: Change the adjustment type and status
+                value:
+                  adjustment_type: Out
+                  status: Pending
+
+      responses:
+        "200":
+          description: Inventory adjustment reason updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/InventoryAdjustmentReason"
+              example:
+                code: 200
+                success: true
+                message: Inventory adjustment reason updated successfully.
+                data:
+                  id: 5
+                  company_id: 1
+                  name: Stock Found
+                  debit_id: 9
+                  credit_id: 206
+                  adjustment_type: Out
+                  status: Pending
+                  created_at: "2026-11-10T09:52:09.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/InventoryAdjustmentReasonNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/InventoryAdjustmentReasonValidationError"
+
+        "500":
+          $ref: "#/components/responses/InventoryAdjustmentReasonSaveFailed"
+
+    delete:
+      tags:
+        - Inventory Adjustment Reasons
+      summary: Delete inventory adjustment reason
+      description: |
+        Soft-deletes an inventory adjustment reason (`deleted_at` is set; the row stays in the
+        database). A deleted reason is no longer listed, returns `404` on every other endpoint, and
+        its name can be used again.
+
+        The reason cannot be deleted (`409`) when any inventory adjustment uses it
+        (`inventory_adjustments.reason`; soft-deleted adjustments are not counted). The web list
+        never shows a delete button for reasons; the API allows deleting unused ones.
+
+        Required permission: `module:accounts-setup.menu:inventory-adjustment-reason.permission:delete`
+      operationId: deleteInventoryAdjustmentReason
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/InventoryAdjustmentReasonId"
+
+      responses:
+        "200":
+          description: Inventory adjustment reason deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 5
+              example:
+                code: 200
+                success: true
+                message: Inventory adjustment reason deleted successfully.
+                data:
+                  id: 5
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/InventoryAdjustmentReasonNotFound"
+
+        "409":
+          description: The reason is still used by inventory adjustments.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Inventory adjustment reason is in use and cannot be deleted.
+                errors:
+                  used_in: [inventory_adjustments]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /inventory-adjustment-reasons/{id}/status:
+    patch:
+      tags:
+        - Inventory Adjustment Reasons
+      summary: Change inventory adjustment reason status
+      description: |
+        Sets the inventory adjustment reason's status to `Approved` or `Inactive`.
+
+        Required permission: `module:accounts-setup.menu:inventory-adjustment-reason.permission:change-status`
+      operationId: updateInventoryAdjustmentReasonStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/InventoryAdjustmentReasonId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/InventoryAdjustmentReason"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 3
+                  company_id: 1
+                  name: Under Adjusted
+                  debit_id: 206
+                  credit_id: 9
+                  adjustment_type: Out
+                  status: Inactive
+                  created_at: "2025-01-23T07:53:09.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/InventoryAdjustmentReasonNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
 components:
   securitySchemes:
     sessionCookie:
@@ -8154,6 +8619,17 @@ components:
       schema:
         type: integer
       example: 2
+
+    InventoryAdjustmentReasonId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Inventory adjustment reason ID. An unknown, soft-deleted or non-numeric ID returns `404`.
+        Reasons are not filtered by company.
+      schema:
+        type: integer
+      example: 3
 
   schemas:
     SuccessEnvelope:
@@ -9077,6 +9553,62 @@ components:
         Chart of accounts ID of a posted ledger account (`is_posted = 1`, not soft-deleted) — the
         web form's account dropdowns. `debit_id` and `credit_id` must be different.
       example: 39
+
+    InventoryAdjustmentReason:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        company_id:
+          type: [integer, "null"]
+          example: 1
+        name:
+          type: [string, "null"]
+          example: Goods Damage
+        debit_id:
+          type: [integer, "null"]
+          description: Chart of accounts ID of the posted ledger that is debited.
+          example: 202
+        credit_id:
+          type: [integer, "null"]
+          description: Chart of accounts ID of the posted ledger that is credited.
+          example: 9
+        adjustment_type:
+          type: [string, "null"]
+          description: Stock direction of adjustments that use this reason.
+          enum: [In, Out, null]
+          example: Out
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2025-01-23T07:48:18.000000Z"
+
+    InventoryAdjustmentReasonName:
+      type: string
+      minLength: 2
+      maxLength: 55
+      description: |
+        2–55 characters (the size of the database column). Must be unique among reasons that are
+        not soft-deleted (not case-sensitive).
+      example: Goods Damage
+
+    InventoryAdjustmentReasonAccountId:
+      type: integer
+      description: |
+        Chart of accounts ID of a posted ledger account (`is_posted = 1`, not soft-deleted) — the
+        web form's account dropdowns. `debit_id` and `credit_id` must be different.
+      example: 202
+
+    InventoryAdjustmentType:
+      type: string
+      enum: [In, Out]
+      description: Stock direction — the web form's Adjustment Type dropdown (setup data type 21).
+      example: Out
 
     Decimal:
       type: [string, number]
@@ -10154,6 +10686,98 @@ components:
                 errors:
                   name:
                     - The name has already been taken.
+            invalidAccount:
+              summary: Account is not a posted ledger account
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected debit id is invalid. "
+                errors:
+                  debit_id:
+                    - The selected debit id is invalid.
+            sameAccount:
+              summary: Debit and credit are the same account
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The credit account must be different from the debit account. "
+                errors:
+                  credit_id:
+                    - The credit account must be different from the debit account.
+            invalidStatus:
+              summary: Update only — status not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    InventoryAdjustmentReasonNotFound:
+      description: No inventory adjustment reason with this ID, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    InventoryAdjustmentReasonSaveFailed:
+      description: The record could not be saved (a database error was caught). The database error text is not returned.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 500
+            success: false
+            message: Inventory adjustment reason could not be saved.
+            errors: null
+
+    InventoryAdjustmentReasonValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingFields:
+              summary: Create only — required fields missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. The debit id field is required. The credit id field is required. The adjustment type field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+                  debit_id:
+                    - The debit id field is required.
+                  credit_id:
+                    - The credit id field is required.
+                  adjustment_type:
+                    - The adjustment type field is required.
+            duplicateName:
+              summary: Name already used by another reason
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken. "
+                errors:
+                  name:
+                    - The name has already been taken.
+            invalidAdjustmentType:
+              summary: adjustment_type is not In / Out
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected adjustment type is invalid. "
+                errors:
+                  adjustment_type:
+                    - The selected adjustment type is invalid.
             invalidAccount:
               summary: Account is not a posted ledger account
               value:
