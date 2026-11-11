@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.20.0
+  version: 1.21.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -44,7 +44,7 @@ info:
     `exception`, `file`, `line` and `trace`. Production must run with `APP_DEBUG=false`.
 
     ## Permissions
-    Role, branch, store, division, district, upazila, union, department, customer group, customer media, supplier group, unit,
+    Role, branch, store, division, district, upazila, union, employee, department, customer group, customer media, supplier group, unit,
     brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason, inventory adjustment reason, cost center, non-inventory, account group and product endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
@@ -86,6 +86,8 @@ tags:
     description: Upazila management (Settings → Upazila)
   - name: Unions
     description: Union management (Settings → Union)
+  - name: Employees
+    description: Employee management (Settings → Employee)
   - name: Departments
     description: Department management (Settings → Department)
   - name: Customer Groups
@@ -3532,6 +3534,503 @@ paths:
 
         "404":
           $ref: "#/components/responses/UnionNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+  /employees:
+    get:
+      tags:
+        - Employees
+      summary: List employees
+      description: |
+        Paginated list of employees (API version of the web list `admin/settings-employee-list`).
+        Only employees of the **logged-in user's company** are listed — all of them, like the web
+        list (the per-user supervisor / sales representative filter is not applied). Soft-deleted
+        employees are not listed. Each employee includes its branch (`branch`) and supervisor
+        (`supervisor`). The employees are in `data.items` and the pagination info in
+        `data.pagination`.
+
+        Required permission: `module:system-configuration.menu:employee.permission:view`
+      operationId: listEmployees
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name, designation, email, phone or address.
+          schema:
+            type: string
+          example: Test
+        - name: branch_id
+          in: query
+          description: Only employees of this branch. A non-numeric value is ignored.
+          schema:
+            type: integer
+          example: 1
+        - name: parent_id
+          in: query
+          description: Only employees under this supervisor. A non-numeric value is ignored.
+          schema:
+            type: integer
+          example: 2
+        - name: status
+          in: query
+          description: Only employees with this status.
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, designation, email, phone, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Employee list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Employee"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 3
+                      company_id: 1
+                      branch_id: 1
+                      branch:
+                        id: 1
+                        name: Test Branch
+                      parent_id: 2
+                      supervisor:
+                        id: 2
+                        name: Test Supervisor
+                      name: Test Employee
+                      designation: Sales Representative
+                      email: test.employee@example.com
+                      phone: "01700000001"
+                      address: Test Road 1, Test City
+                      status: Approved
+                      created_at: "2025-01-18T10:02:08.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 1
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Employees
+      summary: Create employee
+      description: |
+        Creates an employee (API version of the web form `admin/settings-employee-create`). The
+        validation rules are the same as the web form, read from the employee form settings,
+        plus:
+
+        - `phone` (required): a Bangladeshi number (same pattern as the web form), at most 20
+          characters, unique among employees that are not soft-deleted. The web form's branch
+          phone check is applied too.
+        - `email` (optional): a valid email, at most 55 characters, unique among employees that
+          are not soft-deleted.
+        - `branch_id` (optional): an existing, not soft-deleted branch.
+        - `parent_id` (optional): the supervisor — an existing, not soft-deleted employee of the
+          logged-in user's company.
+        - `status` is optional: `Approved` when not sent; when sent it must be `Approved`,
+          `Inactive`, `Pending` or `Cancel` and cannot be empty.
+
+        `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:system-configuration.menu:employee.permission:create`
+      operationId: createEmployee
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/EmployeeRequest"
+                - type: object
+                  required:
+                    - name
+                    - phone
+            example:
+              name: Sample Employee
+              phone: "01700000002"
+              email: sample.employee@example.com
+              designation: Sales Representative
+              address: Test Road 2, Test City
+              branch_id: 1
+              parent_id: 2
+
+      responses:
+        "201":
+          description: Employee created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Employee"
+              example:
+                code: 201
+                success: true
+                message: Employee created successfully.
+                data:
+                  id: 23
+                  company_id: 1
+                  branch_id: 1
+                  branch:
+                    id: 1
+                    name: Test Branch
+                  parent_id: 2
+                  supervisor:
+                    id: 2
+                    name: Test Supervisor
+                  name: Sample Employee
+                  designation: Sales Representative
+                  email: sample.employee@example.com
+                  phone: "01700000002"
+                  address: Test Road 2, Test City
+                  status: Approved
+                  created_at: "2026-11-11T11:15:42.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/EmployeeValidationError"
+
+  /employees/{id}:
+    put:
+      tags:
+        - Employees
+      summary: Update employee
+      description: |
+        Updates an employee (API version of the web edit form `admin/settings-employee-edit/{id}`).
+        This is a **partial update**:
+
+        - A field that is **not sent** keeps its current value.
+        - A field sent **empty** (`""` or `null`) is saved as `null`. `name` and `phone` are
+          required, so sending them empty returns `422`.
+        - Sent fields use the same rules as create; the employee's own email and phone may be
+          kept. The employee cannot be its own supervisor (`parent_id`).
+        - `status` is changed only when sent (`Approved`, `Inactive`, `Pending` or `Cancel`;
+          cannot be empty); otherwise the current status is kept.
+        - `company_id` is set to the logged-in user's company (the employee is already of that
+          company).
+
+        Required permission: `module:system-configuration.menu:employee.permission:edit`
+      operationId: updateEmployee
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/EmployeeId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmployeeRequest"
+            examples:
+              designationOnly:
+                summary: Change only the designation
+                value:
+                  designation: Area Manager
+              changeSupervisor:
+                summary: Move under another supervisor and change status
+                value:
+                  parent_id: 4
+                  status: Inactive
+              clearEmail:
+                summary: Remove the email and the supervisor
+                value:
+                  email: ""
+                  parent_id: null
+
+      responses:
+        "200":
+          description: Employee updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Employee"
+              example:
+                code: 200
+                success: true
+                message: Employee updated successfully.
+                data:
+                  id: 3
+                  company_id: 1
+                  branch_id: 1
+                  branch:
+                    id: 1
+                    name: Test Branch
+                  parent_id: 2
+                  supervisor:
+                    id: 2
+                    name: Test Supervisor
+                  name: Test Employee
+                  designation: Area Manager
+                  email: test.employee@example.com
+                  phone: "01700000001"
+                  address: Test Road 1, Test City
+                  status: Approved
+                  created_at: "2025-01-18T10:02:08.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/EmployeeNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/EmployeeValidationError"
+
+    delete:
+      tags:
+        - Employees
+      summary: Delete employee
+      description: |
+        Soft-deletes an employee (`deleted_at` is set; the row stays in the database). A deleted
+        employee is no longer listed, returns `404` on every other endpoint, and its email and
+        phone can be used again.
+
+        The employee cannot be deleted (`409`) when it is still used; `errors.used_in` lists where
+        (soft-deleted rows are not counted):
+
+        - `customers.sr_id`, `sales.sr_id`, `sale_return_wihout_refs.sr_id`,
+          `sale_commission_payments.sr_id` — as sales representative
+        - `task_creates.employee_id` — in tasks
+        - `employees.parent_id` — as supervisor of other employees
+        - `users` — assigned to a user as supervisor (`sv_id`) or sales representative (`sr_ids`)
+
+        The web deletes without this check; the API blocks the delete on the server.
+
+        Required permission: `module:system-configuration.menu:employee.permission:delete`
+      operationId: deleteEmployee
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/EmployeeId"
+
+      responses:
+        "200":
+          description: Employee deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 23
+              example:
+                code: 200
+                success: true
+                message: Employee deleted successfully.
+                data:
+                  id: 23
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/EmployeeNotFound"
+
+        "409":
+          description: The employee is still in use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Employee is in use and cannot be deleted.
+                errors:
+                  used_in: [customers.sr_id, sales.sr_id, users]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /employees/{id}/status:
+    patch:
+      tags:
+        - Employees
+      summary: Change employee status
+      description: |
+        Sets the employee's status to `Approved` or `Inactive`. Only the status changes.
+
+        Required permission: `module:system-configuration.menu:employee.permission:change-status`
+      operationId: updateEmployeeStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/EmployeeId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Employee"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 3
+                  company_id: 1
+                  branch_id: 1
+                  branch:
+                    id: 1
+                    name: Test Branch
+                  parent_id: 2
+                  supervisor:
+                    id: 2
+                    name: Test Supervisor
+                  name: Test Employee
+                  designation: Sales Representative
+                  email: test.employee@example.com
+                  phone: "01700000001"
+                  address: Test Road 1, Test City
+                  status: Inactive
+                  created_at: "2025-01-18T10:02:08.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/EmployeeNotFound"
 
         "419":
           $ref: "#/components/responses/CsrfMismatch"
@@ -11396,6 +11895,17 @@ components:
         type: integer
       example: 1
 
+    EmployeeId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Employee ID. An unknown, soft-deleted or non-numeric ID, or an employee of another
+        company, returns `404`.
+      schema:
+        type: integer
+      example: 3
+
     DepartmentId:
       name: id
       in: path
@@ -12169,6 +12679,115 @@ components:
           maxLength: 255
           description: Full URL with a scheme (`https://…`).
           example: https://sample-union.example.com
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          description: Optional; cannot be empty when sent. Create defaults to `Approved`.
+          example: Approved
+
+    Employee:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 3
+        company_id:
+          type: integer
+          example: 1
+        branch_id:
+          type: [integer, "null"]
+          example: 1
+        branch:
+          type: [object, "null"]
+          description: The employee's branch, or `null`.
+          properties:
+            id:
+              type: integer
+              example: 1
+            name:
+              type: [string, "null"]
+              example: Test Branch
+        parent_id:
+          type: [integer, "null"]
+          description: ID of the supervisor (another employee), or `null`.
+          example: 2
+        supervisor:
+          type: [object, "null"]
+          description: The supervisor, or `null`.
+          properties:
+            id:
+              type: integer
+              example: 2
+            name:
+              type: [string, "null"]
+              example: Test Supervisor
+        name:
+          type: [string, "null"]
+          example: Test Employee
+        designation:
+          type: [string, "null"]
+          example: Sales Representative
+        email:
+          type: [string, "null"]
+          example: test.employee@example.com
+        phone:
+          type: [string, "null"]
+          example: "01700000001"
+        address:
+          type: [string, "null"]
+          example: Test Road 1, Test City
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2025-01-18T10:02:08.000000Z"
+
+    EmployeeRequest:
+      type: object
+      description: |
+        Employee fields. Rules come from the employee form settings (same as the web form).
+        `name` and `phone` are required on create; on update every field is optional (see the
+        endpoint).
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: Sample Employee
+        phone:
+          type: string
+          maxLength: 20
+          description: |
+            A Bangladeshi number (for example `01700000002` or `+8801700000002`). Unique among
+            employees that are not soft-deleted. The web form's branch phone check is applied too.
+          example: "01700000002"
+        email:
+          type: [string, "null"]
+          format: email
+          maxLength: 55
+          description: Unique among employees that are not soft-deleted.
+          example: sample.employee@example.com
+        designation:
+          type: [string, "null"]
+          maxLength: 100
+          example: Sales Representative
+        address:
+          type: [string, "null"]
+          maxLength: 200
+          example: Test Road 2, Test City
+        branch_id:
+          type: [integer, "null"]
+          description: An existing, not soft-deleted branch.
+          example: 1
+        parent_id:
+          type: [integer, "null"]
+          description: |
+            The supervisor: an existing, not soft-deleted employee of the logged-in user's
+            company. On update it cannot be the employee itself.
+          example: 2
         status:
           type: string
           enum: [Approved, Inactive, Pending, Cancel]
@@ -13706,6 +14325,73 @@ components:
                 errors:
                   url:
                     - The url must be a valid URL.
+            invalidStatus:
+              summary: Status empty or not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    EmployeeNotFound:
+      description: No employee with this ID in the logged-in user's company, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    EmployeeValidationError:
+      description: Request validation failed; nothing is saved.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            duplicateEmailAndPhone:
+              summary: Email and phone already used by another employee
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The email has already been taken. The phone has already been taken. "
+                errors:
+                  email:
+                    - The email has already been taken.
+                  phone:
+                    - The phone has already been taken.
+            invalidPhone:
+              summary: Phone is not a Bangladeshi number
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The phone format is invalid. "
+                errors:
+                  phone:
+                    - The phone format is invalid.
+            missingName:
+              summary: Create, or update with name sent empty — name missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+            invalidSupervisor:
+              summary: Supervisor does not exist, is of another company, or is the employee itself
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected parent id is invalid. "
+                errors:
+                  parent_id:
+                    - The selected parent id is invalid.
             invalidStatus:
               summary: Status empty or not Approved / Inactive / Pending / Cancel
               value:
