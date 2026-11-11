@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.16.0
+  version: 1.17.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -45,7 +45,7 @@ info:
 
     ## Permissions
     Role, branch, store, division, district, department, customer group, customer media, supplier group, unit,
-    brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason, inventory adjustment reason, cost center and non-inventory endpoints also need a Spatie permission, named
+    brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason, inventory adjustment reason, cost center, non-inventory and account group endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -114,6 +114,8 @@ tags:
     description: Cost center management (Manufacturing Setup → Cost Center)
   - name: Non-Inventories
     description: Non-inventory item management (Manufacturing Setup → Non-Inventory)
+  - name: Account Groups
+    description: Account group management (Accounts Setup → Account Group)
 
 paths:
   /csrf-token:
@@ -9260,6 +9262,450 @@ paths:
                   status:
                     - The selected status is invalid.
 
+  /account-groups:
+    get:
+      tags:
+        - Account Groups
+      summary: List account groups
+      description: |
+        Paginated list of account groups (API version of the web list
+        `admin/account-setup-account-group-list`). Account groups are chart of accounts rows whose
+        parent is a root account (`parent_id = 0`: Assets, Liability, Owner's Equity, Income,
+        Expense) — the same rows the web list shows, including any posted ledger accounts
+        (`is_posted = 1`) placed directly under a root account. Account groups are **not filtered
+        by company** (same as the web list). Soft-deleted accounts are not listed. The items are in
+        `data.items` and the pagination info in `data.pagination`.
+
+        Required permission: `module:accounts-setup.menu:account-group.permission:view`
+      operationId: listAccountGroups
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, account code, name or status.
+          schema:
+            type: string
+          example: Assets
+        - name: account_type_id
+          in: query
+          description: Only account groups of this account type. A non-numeric value is ignored.
+          schema:
+            type: integer
+          example: 1
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, account_code, name, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Account group list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/AccountGroup"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 2
+                      account_code: ACG0000011
+                      name: Current Assets
+                      account_type_id: 1
+                      account_type_name: Assets
+                      parent_id: 1
+                      parent_name: Assets
+                      is_posted: 0
+                      status: Approved
+                      branch_id: 0
+                      company_id: 1
+                      created_at: "2025-01-18T10:02:07.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 1
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Account Groups
+      summary: Create account group
+      description: |
+        Creates an account group (API version of the web form
+        `admin/account-setup-account-group-create`). Saving works the same as the web form:
+
+        - `name` is required, 2–255 characters. Names do not have to be unique.
+        - `account_type_id` is required and must be an existing account type that is not
+          soft-deleted (`1` Assets, `2` Liability, `3` Owner's Equity, `4` Income, `5` Expense).
+        - `branch_id` is optional; it is saved as sent (`null` when not sent).
+        - `parent_id` is set from the account type's root account (general setup values
+          `assets`, `liability`, `owners_equity`, `income`, `expense`).
+        - `account_code` is generated from the last account group under that root account.
+        - `is_posted` is always `0`, `status` is always `Approved` and `company_id` is set to the
+          logged-in user's company. `is_posted` and `status` in the request are ignored.
+
+        Required permission: `module:accounts-setup.menu:account-group.permission:create`
+      operationId: createAccountGroup
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountGroupRequest"
+            example:
+              name: Short Term Investment
+              account_type_id: 1
+
+      responses:
+        "201":
+          description: Account group created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/AccountGroup"
+              example:
+                code: 201
+                success: true
+                message: Account group created successfully.
+                data:
+                  id: 210
+                  account_code: ACG0000013
+                  name: Short Term Investment
+                  account_type_id: 1
+                  account_type_name: Assets
+                  parent_id: 1
+                  parent_name: Assets
+                  is_posted: 0
+                  status: Approved
+                  branch_id: null
+                  company_id: 1
+                  created_at: "2026-11-11T05:12:40.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/AccountGroupValidationError"
+
+  /account-groups/{id}:
+    put:
+      tags:
+        - Account Groups
+      summary: Update account group
+      description: |
+        Updates an account group (API version of the web edit form
+        `admin/account-setup-account-group-edit/{id}`). This works **exactly like the web edit
+        form** — it is not a partial update. If validation fails, nothing is saved.
+
+        - `name` and `account_type_id` are required (same rules as create); `branch_id` is
+          optional and is saved as sent (`null` when not sent).
+        - `parent_id` is set again from the account type: `1` → account `1`, `2` → `13`,
+          `3` → `19`, `4` → `24` (fixed IDs, not the general setup values). For type `5`
+          (Expense) the parent is not changed.
+        - `account_code` is generated again from the parent's code **on every update**, even
+          when only the name changes, so it can change and can be the same as another account
+          group's code. For example every Assets group updated this way gets `AC0000011`
+          (created groups get codes like `ACG0000013`).
+        - `is_posted` is always set to `0` and `status` to `Approved` (an `Inactive` account group
+          becomes `Approved` again; a posted ledger account in the list becomes a group).
+          `is_posted` and `status` in the request are ignored; use
+          `PATCH /account-groups/{id}/status` to change the status.
+        - `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:accounts-setup.menu:account-group.permission:edit`
+      operationId: updateAccountGroup
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/AccountGroupId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountGroupRequest"
+            example:
+              name: Fixed Assets
+              account_type_id: 1
+
+      responses:
+        "200":
+          description: Account group updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/AccountGroup"
+              example:
+                code: 200
+                success: true
+                message: Account group updated successfully.
+                data:
+                  id: 13
+                  account_code: AC0000011
+                  name: Fixed Assets
+                  account_type_id: 1
+                  account_type_name: Assets
+                  parent_id: 1
+                  parent_name: Assets
+                  is_posted: 0
+                  status: Approved
+                  branch_id: null
+                  company_id: 1
+                  created_at: "2025-01-18T10:02:07.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/AccountGroupNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/AccountGroupValidationError"
+
+    delete:
+      tags:
+        - Account Groups
+      summary: Delete account group
+      description: |
+        Soft-deletes an account group (`deleted_at` is set; the row stays in the database). A
+        deleted account group is no longer listed and returns `404` on every other endpoint.
+
+        The account group cannot be deleted (`409`) when it is still used; `errors.used_in` lists
+        where (soft-deleted rows are not counted):
+
+        - `chart_of_accounts` — it has child accounts (`parent_id`)
+        - `general_ledgers` — it has general ledger entries (`account_id`)
+        - `opening_balances` — it has opening balance entries (`account_id`)
+
+        The web delete has no such check.
+
+        Required permission: `module:accounts-setup.menu:account-group.permission:delete`
+      operationId: deleteAccountGroup
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/AccountGroupId"
+
+      responses:
+        "200":
+          description: Account group deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 210
+              example:
+                code: 200
+                success: true
+                message: Account group deleted successfully.
+                data:
+                  id: 210
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/AccountGroupNotFound"
+
+        "409":
+          description: The account group has child accounts, ledger or opening balance entries.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Account group is in use and cannot be deleted.
+                errors:
+                  used_in: [chart_of_accounts]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /account-groups/{id}/status:
+    patch:
+      tags:
+        - Account Groups
+      summary: Change account group status
+      description: |
+        Sets the account group's status to `Approved` or `Inactive`. Only the status changes;
+        the other fields stay as they are.
+
+        Required permission: `module:accounts-setup.menu:account-group.permission:change-status`
+      operationId: updateAccountGroupStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/AccountGroupId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/AccountGroup"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 13
+                  account_code: ACG0000012
+                  name: Fixed Assets
+                  account_type_id: 1
+                  account_type_name: Assets
+                  parent_id: 1
+                  parent_name: Assets
+                  is_posted: 0
+                  status: Inactive
+                  branch_id: 0
+                  company_id: 1
+                  created_at: "2025-01-18T10:02:07.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/AccountGroupNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`; nothing is saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
 components:
   securitySchemes:
     sessionCookie:
@@ -9507,6 +9953,18 @@ components:
       schema:
         type: integer
       example: 1
+
+    AccountGroupId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Account group ID (a chart of accounts ID). An unknown, soft-deleted or non-numeric ID, or an
+        account that is not in the account group list (its parent is not a root account), returns
+        `404`. Account groups are not filtered by company.
+      schema:
+        type: integer
+      example: 13
 
   schemas:
     SuccessEnvelope:
@@ -10563,6 +11021,77 @@ components:
     NonInventoryDescription:
       type: [string, "null"]
       example: LPG
+
+    AccountGroup:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 13
+        account_code:
+          type: [string, "null"]
+          example: ACG0000012
+        name:
+          type: [string, "null"]
+          example: Fixed Assets
+        account_type_id:
+          type: [integer, "null"]
+          example: 1
+        account_type_name:
+          type: [string, "null"]
+          description: Name of the account type, or `null` when it does not exist.
+          example: Assets
+        parent_id:
+          type: integer
+          description: The root account the group is under.
+          example: 1
+        parent_name:
+          type: [string, "null"]
+          example: Assets
+        is_posted:
+          type: integer
+          enum: [0, 1]
+          description: |
+            `0` = account group (parent account), `1` = posted ledger account. Accounts created or
+            updated through this API are always `0`.
+          example: 0
+        status:
+          type: string
+          description: Plain string column; the API only sets `Approved` or `Inactive`.
+          example: Approved
+        branch_id:
+          type: [integer, "null"]
+          example: 0
+        company_id:
+          type: [integer, "null"]
+          example: 1
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2025-01-18T10:02:07.000000Z"
+
+    AccountGroupRequest:
+      type: object
+      required:
+        - name
+        - account_type_id
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 255
+          description: 2–255 characters. Does not have to be unique.
+          example: Fixed Assets
+        account_type_id:
+          type: integer
+          description: |
+            An existing account type that is not soft-deleted (`1` Assets, `2` Liability,
+            `3` Owner's Equity, `4` Income, `5` Expense).
+          example: 1
+        branch_id:
+          type: [integer, "null"]
+          description: Optional; saved as sent (`null` when not sent).
+          example: null
 
     Decimal:
       type: [string, number]
@@ -11667,6 +12196,64 @@ components:
                 errors:
                   status:
                     - The selected status is invalid.
+
+    AccountGroupNotFound:
+      description: |
+        No account group with this ID: unknown, non-numeric or soft-deleted, or the account is not
+        in the account group list.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    AccountGroupValidationError:
+      description: Request validation failed; nothing is saved.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingName:
+              summary: Name missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+            shortName:
+              summary: Name shorter than 2 characters
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name must be at least 2 characters. "
+                errors:
+                  name:
+                    - The name must be at least 2 characters.
+            missingAccountType:
+              summary: Account type missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The account type id field is required. "
+                errors:
+                  account_type_id:
+                    - The account type id field is required.
+            invalidAccountType:
+              summary: Account type does not exist or is soft-deleted
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected account type id is invalid. "
+                errors:
+                  account_type_id:
+                    - The selected account type id is invalid.
 
     NonInventoryNotFound:
       description: No non-inventory with this ID, or a non-numeric or soft-deleted ID.
