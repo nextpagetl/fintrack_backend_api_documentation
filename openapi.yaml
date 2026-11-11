@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.22.0
+  version: 1.23.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -45,7 +45,7 @@ info:
 
     ## Permissions
     Role, branch, store, division, district, upazila, union, employee, department, customer group, customer media, customer, supplier group, unit,
-    brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason, inventory adjustment reason, cost center, non-inventory, account group and product endpoints also need a Spatie permission, named
+    brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason, inventory adjustment reason, cost center, non-inventory, account group, chart of account and product endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -124,6 +124,8 @@ tags:
     description: Non-inventory item management (Manufacturing Setup → Non-Inventory)
   - name: Account Groups
     description: Account group management (Accounts Setup → Account Group)
+  - name: Chart of Accounts
+    description: Chart of account management (Accounts Setup → Chart of Account)
   - name: Products
     description: Product management and product images (Product Manage → Product)
 
@@ -11728,6 +11730,499 @@ paths:
                   status:
                     - The selected status is invalid.
 
+  /chart-of-accounts:
+    get:
+      tags:
+        - Chart of Accounts
+      summary: List chart of accounts
+      description: |
+        Paginated list of accounts (API version of the web list
+        `admin/account-setup-chartOfAccount-list`). Like the web list, it covers the accounts
+        **below the account groups**:
+
+        - **level 2** — the parent is an account group (`GET /account-groups`);
+        - **level 3** — the parent is a level 2 account.
+
+        Root accounts and account groups are not listed here. Accounts are not filtered by company
+        (same as the web list). Soft-deleted accounts are not listed. The accounts are in
+        `data.items` and the pagination info in `data.pagination`.
+
+        Required permission: `module:accounts-setup.menu:account.permission:view`
+      operationId: listChartOfAccounts
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, account code or name.
+          schema:
+            type: string
+          example: Test
+        - name: account_type_id
+          in: query
+          description: Only accounts of this account type. A non-numeric value is ignored.
+          schema:
+            type: integer
+          example: 1
+        - name: group_id
+          in: query
+          description: Only accounts under this account group (its level 2 and level 3 accounts). A non-numeric value is ignored.
+          schema:
+            type: integer
+          example: 2
+        - name: parent_id
+          in: query
+          description: Only accounts directly under this parent. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: is_posted
+          in: query
+          description: "`1` = only ledger accounts, `0` = only parent accounts. Any other value is ignored."
+          schema:
+            type: integer
+            enum: [0, 1]
+        - name: status
+          in: query
+          description: Only accounts with this status.
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, account_code, name, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Account list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/ChartOfAccount"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 30
+                      account_code: AC00000130
+                      name: Test Ledger
+                      account_type:
+                        id: 1
+                        name: Assets
+                      group:
+                        id: 2
+                        name: Test Group
+                      parent:
+                        id: 29
+                        name: Test Parent Account
+                      level: 3
+                      is_posted: 1
+                      branch_id: null
+                      company_id: 1
+                      status: Approved
+                      created_at: "2025-01-18T10:02:07.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 1
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Chart of Accounts
+      summary: Create account
+      description: |
+        Creates an account (API version of the web form `admin/account-setup-chartOfAccount-create`).
+        Saving works the same as the web form:
+
+        - `name` (required, 2–255 characters; does not have to be unique).
+        - `group_id` (required): an account group — a direct child of a root account.
+        - `parent_id` (optional): a **parent account** (`is_posted` 0) directly under `group_id`.
+          Without it the account is created at level 2 under the group; with it, at level 3
+          under the parent.
+        - `is_posted` (optional): `true` / `1` / `"on"` creates a ledger account; anything else
+          (or not sent) a parent account.
+        - The account type comes from the parent (or group), and `account_code` is generated from
+          the last account under the same parent.
+        - `status` is optional: `Approved` when not sent; when sent it must be `Approved`,
+          `Inactive`, `Pending` or `Cancel` and cannot be empty.
+
+        `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:accounts-setup.menu:account.permission:create`
+      operationId: createChartOfAccount
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChartOfAccountRequest"
+            examples:
+              parentAccount:
+                summary: A parent account (level 2) under a group
+                value:
+                  name: Test Parent Account
+                  group_id: 2
+              ledger:
+                summary: A ledger (level 3) under a parent account
+                value:
+                  name: Test Ledger
+                  group_id: 2
+                  parent_id: 29
+                  is_posted: true
+
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ChartOfAccount"
+              example:
+                code: 201
+                success: true
+                message: Account created successfully.
+                data:
+                  id: 30
+                  account_code: AC00000130
+                  name: Test Ledger
+                  account_type:
+                    id: 1
+                    name: Assets
+                  group:
+                    id: 2
+                    name: Test Group
+                  parent:
+                    id: 29
+                    name: Test Parent Account
+                  level: 3
+                  is_posted: 1
+                  branch_id: null
+                  company_id: 1
+                  status: Approved
+                  created_at: "2026-11-11T09:41:23.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/ChartOfAccountValidationError"
+
+  /chart-of-accounts/{id}:
+    put:
+      tags:
+        - Chart of Accounts
+      summary: Update account
+      description: |
+        Updates an account (API version of the web edit form
+        `admin/account-setup-chartOfAccount-edit/{id}`). This works **exactly like the web edit
+        form** — it is not a partial update. If validation fails, nothing is saved.
+
+        - `name` and `group_id` are required; `parent_id`, `is_posted` and `branch_id` use the
+          same rules as create.
+        - The parent and account type are set again from `parent_id` (or `group_id`).
+        - `account_code` is generated again from the parent's code **on every update**, even when
+          only the name changes, so it can change and can be the same as another account's code.
+        - `is_posted` is set to 1 only when sent as `true` / `1` / `"on"`; **not sending it saves
+          0** (a ledger becomes a parent account).
+        - `branch_id` is saved as sent (`null` when not sent).
+        - `status` is always set to `Approved`; use `PATCH /chart-of-accounts/{id}/status` to
+          change it.
+        - `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:accounts-setup.menu:account.permission:edit`
+      operationId: updateChartOfAccount
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ChartOfAccountId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/ChartOfAccountRequest"
+                - type: object
+                  required:
+                    - name
+                    - group_id
+            example:
+              name: Test Ledger 2
+              group_id: 2
+              parent_id: 29
+              is_posted: true
+
+      responses:
+        "200":
+          description: Account updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ChartOfAccount"
+              example:
+                code: 200
+                success: true
+                message: Account updated successfully.
+                data:
+                  id: 30
+                  account_code: AC000001291
+                  name: Test Ledger 2
+                  account_type:
+                    id: 1
+                    name: Assets
+                  group:
+                    id: 2
+                    name: Test Group
+                  parent:
+                    id: 29
+                    name: Test Parent Account
+                  level: 3
+                  is_posted: 1
+                  branch_id: null
+                  company_id: 1
+                  status: Approved
+                  created_at: "2026-11-11T09:41:23.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/ChartOfAccountNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/ChartOfAccountValidationError"
+
+    delete:
+      tags:
+        - Chart of Accounts
+      summary: Delete account
+      description: |
+        Soft-deletes an account (`deleted_at` is set; the row stays in the database). A deleted
+        account is no longer listed and returns `404` on every other endpoint.
+
+        The account cannot be deleted (`409`) when it is still used (soft-deleted rows are not
+        counted); `errors.used_in` lists where:
+
+        - `chart_of_accounts` — it has child accounts;
+        - ledgers and vouchers — `general_ledgers`, `opening_balances`, `journal_voucher_ledgers`,
+          `payment_voucher_ledgers`, `receive_voucher_ledgers`, `contra_voucher_details`,
+          `payment_vouchers`, `receive_vouchers`;
+        - settings — `payment_types` (`account_id`, `payment_types.default_account_id`), `banks`,
+          `general_setups.deposit_account_id`, `report_models`;
+        - other documents holding `account_id` — sale payments, purchases, sales, POS, bookings,
+          inventory adjustments, debit / credit notes, service documents, BOM / WIP cost lines.
+
+        The web deletes without this check; the API blocks the delete on the server.
+
+        Required permission: `module:accounts-setup.menu:account.permission:delete`
+      operationId: deleteChartOfAccount
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ChartOfAccountId"
+
+      responses:
+        "200":
+          description: Account deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 30
+              example:
+                code: 200
+                success: true
+                message: Account deleted successfully.
+                data:
+                  id: 30
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/ChartOfAccountNotFound"
+
+        "409":
+          description: The account has child accounts or is still used.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Account is in use and cannot be deleted.
+                errors:
+                  used_in: [general_ledgers, opening_balances, journal_voucher_ledgers]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /chart-of-accounts/{id}/status:
+    patch:
+      tags:
+        - Chart of Accounts
+      summary: Change account status
+      description: |
+        Sets the account's status to `Approved` or `Inactive`. Only the status changes.
+
+        Required permission: `module:accounts-setup.menu:account.permission:change-status`
+      operationId: updateChartOfAccountStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ChartOfAccountId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated. `data` is the account (see `ChartOfAccount`) with the new status.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ChartOfAccount"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/ChartOfAccountNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
   /products:
     get:
       tags:
@@ -12711,6 +13206,18 @@ components:
       schema:
         type: integer
       example: 13
+
+    ChartOfAccountId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Account ID (a chart of accounts ID). An unknown, soft-deleted or non-numeric ID, or an
+        account that is not at level 2 or 3 (a root account or an account group), returns `404`.
+        Accounts are not filtered by company.
+      schema:
+        type: integer
+      example: 30
 
     ProductId:
       name: id
@@ -14304,6 +14811,84 @@ components:
           type: [integer, "null"]
           description: Optional; saved as sent (`null` when not sent).
           example: null
+
+    ChartOfAccount:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 30
+        account_code:
+          type: [string, "null"]
+          example: AC00000130
+        name:
+          type: [string, "null"]
+          example: Test Ledger
+        account_type:
+          $ref: "#/components/schemas/NamedRef"
+        group:
+          $ref: "#/components/schemas/NamedRef"
+        parent:
+          $ref: "#/components/schemas/NamedRef"
+        level:
+          type: [integer, "null"]
+          enum: [2, 3, null]
+          description: "`2` = directly under an account group, `3` = under a level 2 account."
+          example: 3
+        is_posted:
+          type: integer
+          enum: [0, 1]
+          description: "`1` = ledger account (transactions are posted to it), `0` = parent account."
+          example: 1
+        branch_id:
+          type: [integer, "null"]
+          example: null
+        company_id:
+          type: [integer, "null"]
+          example: 1
+        status:
+          type: string
+          description: Plain string column; the API only sets `Approved`, `Inactive`, `Pending` or `Cancel`.
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2026-11-11T09:41:23.000000Z"
+
+    ChartOfAccountRequest:
+      type: object
+      description: |
+        Account fields. Rules come from the chart of account form settings (same as the web form).
+        `name` and `group_id` are required on create and update.
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 255
+          description: Does not have to be unique.
+          example: Test Ledger
+        group_id:
+          type: integer
+          description: An account group — a direct child of a root account.
+          example: 2
+        parent_id:
+          type: [integer, "null"]
+          description: |
+            Optional. A parent account (`is_posted` 0) directly under `group_id`; on update it
+            cannot be the account itself.
+          example: 29
+        is_posted:
+          type: [boolean, integer, string, "null"]
+          description: "`true` / `1` / `\"on\"` = ledger account; anything else = parent account."
+          example: true
+        branch_id:
+          type: [integer, "null"]
+          example: null
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          description: Create only; optional, cannot be empty when sent, defaults to `Approved`. Ignored on update.
+          example: Approved
 
     Product:
       type: object
@@ -16021,6 +16606,64 @@ components:
                 errors:
                   account_type_id:
                     - The selected account type id is invalid.
+
+    ChartOfAccountNotFound:
+      description: |
+        No account at level 2 or 3 with this ID: unknown, non-numeric or soft-deleted, or a root
+        account or account group.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    ChartOfAccountValidationError:
+      description: Request validation failed; nothing is saved.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingGroup:
+              summary: Group missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The group id field is required. "
+                errors:
+                  group_id:
+                    - The group id field is required.
+            notAGroup:
+              summary: group_id is not an account group
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected group id is not an account group. "
+                errors:
+                  group_id:
+                    - The selected group id is not an account group.
+            invalidParent:
+              summary: parent_id is a ledger, under another group, or the account itself
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected parent id must be a parent account (not posted) directly under the selected group. "
+                errors:
+                  parent_id:
+                    - The selected parent id must be a parent account (not posted) directly under the selected group.
+            shortName:
+              summary: Name shorter than 2 characters
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name must be at least 2 characters. "
+                errors:
+                  name:
+                    - The name must be at least 2 characters.
 
     NonInventoryNotFound:
       description: No non-inventory with this ID, or a non-numeric or soft-deleted ID.
