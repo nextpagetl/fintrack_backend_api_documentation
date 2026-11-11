@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.17.0
+  version: 1.18.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -45,7 +45,7 @@ info:
 
     ## Permissions
     Role, branch, store, division, district, department, customer group, customer media, supplier group, unit,
-    brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason, inventory adjustment reason, cost center, non-inventory and account group endpoints also need a Spatie permission, named
+    brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason, inventory adjustment reason, cost center, non-inventory, account group and product endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -116,6 +116,8 @@ tags:
     description: Non-inventory item management (Manufacturing Setup → Non-Inventory)
   - name: Account Groups
     description: Account group management (Accounts Setup → Account Group)
+  - name: Products
+    description: Product management and product images (Product Manage → Product)
 
 paths:
   /csrf-token:
@@ -9706,6 +9708,686 @@ paths:
                   status:
                     - The selected status is invalid.
 
+  /products:
+    get:
+      tags:
+        - Products
+      summary: List products
+      description: |
+        Paginated list of products (API version of the web list `admin/inventory-setup-product-list`).
+        Only products of the **logged-in user's company** are listed (same as the web list).
+        Soft-deleted products are not listed. The items are in `data.items` and the pagination info
+        in `data.pagination`.
+
+        Required permission: `module:product-manage.menu:product.permission:view`
+      operationId: listProducts
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: |
+            Partial match on ID, code, name, purchase price, sale price, low stock, description, or
+            the brand, unit, category or product type name.
+          schema:
+            type: string
+          example: Softener
+        - name: category_id
+          in: query
+          description: Only products of this category. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: brand_id
+          in: query
+          description: Only products of this brand. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: unit_id
+          in: query
+          description: Only products of this unit. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: product_type_id
+          in: query
+          description: Only products of this product type. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: status
+          in: query
+          description: Only products with this status.
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, code, name, purchases_price, sale_price, low_stock, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Product list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Product"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 1
+                      company_id: 1
+                      code: null
+                      name: Silicone Softener WM-80
+                      category_id: 7
+                      category_name: Silicone
+                      brand_id: 1
+                      brand_name: Brand1
+                      unit_id: 1
+                      unit_name: KG
+                      product_type_id: 3
+                      product_type_name: Raw Material & Finished Good
+                      purchases_price: "1.810000"
+                      sale_price: "2.300000"
+                      sd_rate: null
+                      vat_rate: null
+                      low_stock: "100.000000"
+                      description: null
+                      image: null
+                      image_url: null
+                      images: []
+                      status: Approved
+                      created_at: "2025-01-18T10:14:49.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 1
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Products
+      summary: Create product
+      description: |
+        Creates a product (API version of the web form `admin/inventory-setup-product-create`).
+        Validation rules come from the web form settings (same as the web form). If validation
+        fails, nothing is saved.
+
+        - `name` (required) and `unit_id` (required) — see `ProductRequest` for every field.
+        - `status` is optional: `Approved` when not sent; when sent it must be `Approved`,
+          `Inactive`, `Pending` or `Cancel` and cannot be empty.
+        - `images` is optional: paths returned by `POST /products/images`. The files are moved
+          from the temporary folder to the product, and `image` becomes the **last** one.
+        - `type_id` is always `Pos Product` and `company_id` is the logged-in user's company.
+          A product code is **not** generated: `code` is saved as sent (`null` when not sent).
+        - The product and its images are saved together; if anything fails nothing is saved and
+          the API returns `500`.
+
+        Required permission: `module:product-manage.menu:product.permission:create`
+      operationId: createProduct
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/ProductRequest"
+                - type: object
+                  required:
+                    - name
+                    - unit_id
+            example:
+              name: Silicone Softener WM-90
+              code: PID0001
+              unit_id: 1
+              category_id: 7
+              brand_id: 1
+              product_type_id: 3
+              purchases_price: 1.9
+              sale_price: 2.5
+              low_stock: 100
+              status: Approved
+              images:
+                - public/uploads/product/tmp/2/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+
+      responses:
+        "201":
+          description: Product created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Product"
+              example:
+                code: 201
+                success: true
+                message: Product created successfully.
+                data:
+                  id: 223
+                  company_id: 1
+                  code: PID0001
+                  name: Silicone Softener WM-90
+                  category_id: 7
+                  category_name: Silicone
+                  brand_id: 1
+                  brand_name: Brand1
+                  unit_id: 1
+                  unit_name: KG
+                  product_type_id: 3
+                  product_type_name: Raw Material & Finished Good
+                  purchases_price: "1.900000"
+                  sale_price: "2.500000"
+                  sd_rate: null
+                  vat_rate: null
+                  low_stock: "100.000000"
+                  description: null
+                  image: public/uploads/product/223/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+                  image_url: https://backend-fintrack360.eduguard360.com/storage/uploads/product/223/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+                  images:
+                    - id: 1
+                      path: public/uploads/product/223/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+                      url: https://backend-fintrack360.eduguard360.com/storage/uploads/product/223/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+                  status: Approved
+                  created_at: "2026-11-11T08:30:12.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/ProductValidationError"
+
+        "500":
+          $ref: "#/components/responses/ProductSaveFailed"
+
+  /products/images:
+    post:
+      tags:
+        - Products
+      summary: Upload product image
+      description: |
+        Step 1 of 2 for product images: call this as soon as a file is chosen. The image is resized
+        to **800×500** (same as the web upload) and kept in the logged-in user's **temporary**
+        folder (`public/uploads/product/tmp/{user_id}/`). Nothing is saved in the database.
+
+        Step 2: send the returned `data.path` in `images` to `POST /products` or
+        `PUT /products/{id}` when the user saves. Show `data.url` as the preview.
+
+        A temporary image that is not saved with a product is deleted by the daily cleanup
+        (02:00 Asia/Dhaka) once it is older than 24 hours; sending its path after that returns `422`
+        and the file must be uploaded again. The URL works only when the server has
+        `php artisan storage:link`.
+
+        Required permission: `module:product-manage.menu:product.permission:create` **or**
+        `module:product-manage.menu:product.permission:edit`
+      operationId: uploadProductImage
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - image
+              properties:
+                image:
+                  type: string
+                  format: binary
+                  description: A `jpg`, `jpeg`, `png` or `webp` image, at most 5 MB.
+
+      responses:
+        "201":
+          description: Image uploaded to the temporary folder
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          path:
+                            type: string
+                            description: Send this in `images` when saving the product.
+                          url:
+                            type: string
+                            description: Public URL of the uploaded image, for the preview.
+              example:
+                code: 201
+                success: true
+                message: Image uploaded successfully.
+                data:
+                  path: public/uploads/product/tmp/2/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+                  url: https://backend-fintrack360.eduguard360.com/storage/uploads/product/tmp/2/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: No file, not an image, wrong type or larger than 5 MB.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              examples:
+                missing:
+                  summary: No file sent
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The image field is required. "
+                    errors:
+                      image:
+                        - The image field is required.
+                wrongType:
+                  summary: Not a jpg / jpeg / png / webp image
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The image must be an image. "
+                    errors:
+                      image:
+                        - The image must be an image.
+                        - "The image must be a file of type: jpg, jpeg, png, webp."
+                tooLarge:
+                  summary: Larger than 5 MB
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The image must not be greater than 5120 kilobytes. "
+                    errors:
+                      image:
+                        - The image must not be greater than 5120 kilobytes.
+
+  /products/{id}:
+    put:
+      tags:
+        - Products
+      summary: Update product
+      description: |
+        Updates a product (API version of the web edit form `admin/inventory-setup-product-edit/{id}`).
+        This is a **partial update**. If validation fails, nothing is saved.
+
+        - A field that is **not sent** keeps its current value.
+        - A field sent **empty** (`""` or `null`) is saved as `null`. `name` and `unit_id` are
+          required, so sending them empty returns `422`.
+        - Sent fields use the same rules as create; the product's own name and code may be kept.
+        - `status` is changed only when sent (`Approved`, `Inactive`, `Pending` or `Cancel`;
+          cannot be empty); otherwise the current status is kept.
+        - `images`:
+          - not sent — the images are kept;
+          - sent — the product's images become exactly this list: paths of current images are
+            kept, new paths from `POST /products/images` are moved to the product, and current
+            images not in the list are **hard-deleted** together with their files;
+          - `[]` — all images are removed and `image` becomes `null`.
+
+          `image` is always the **last** image of the list.
+        - As in the web form, `type_id` is set to `Pos Product` and `company_id` to the logged-in
+          user's company (the product is already of that company).
+
+        Required permission: `module:product-manage.menu:product.permission:edit`
+      operationId: updateProduct
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ProductId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductRequest"
+            examples:
+              priceOnly:
+                summary: Change only the sale price (everything else is kept)
+                value:
+                  sale_price: 2.75
+              clearDescription:
+                summary: Remove the description and code
+                value:
+                  description: ""
+                  code: ""
+              statusOnly:
+                summary: Change only the status
+                value:
+                  status: Inactive
+              replaceImages:
+                summary: Keep one current image, add a new upload, remove the others
+                value:
+                  images:
+                    - public/uploads/product/223/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+                    - public/uploads/product/tmp/2/9296ab32-5ae0-441e-8c83-f037456653ed.png
+              removeAllImages:
+                summary: Remove all images
+                value:
+                  images: []
+
+      responses:
+        "200":
+          description: Product updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Product"
+              example:
+                code: 200
+                success: true
+                message: Product updated successfully.
+                data:
+                  id: 1
+                  company_id: 1
+                  code: null
+                  name: Silicone Softener WM-80
+                  category_id: 7
+                  category_name: Silicone
+                  brand_id: 1
+                  brand_name: Brand1
+                  unit_id: 1
+                  unit_name: KG
+                  product_type_id: 3
+                  product_type_name: Raw Material & Finished Good
+                  purchases_price: "1.810000"
+                  sale_price: "2.750000"
+                  sd_rate: null
+                  vat_rate: null
+                  low_stock: "100.000000"
+                  description: null
+                  image: null
+                  image_url: null
+                  images: []
+                  status: Approved
+                  created_at: "2025-01-18T10:14:49.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/ProductNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/ProductValidationError"
+
+        "500":
+          $ref: "#/components/responses/ProductSaveFailed"
+
+    delete:
+      tags:
+        - Products
+      summary: Delete product
+      description: |
+        Soft-deletes a product (`deleted_at` is set; the row stays in the database). A deleted
+        product is no longer listed and returns `404` on every other endpoint. Its details and
+        attributes are deleted as in the web delete, and its **images are hard-deleted together
+        with their files**.
+
+        The product cannot be deleted (`409`) when it is still used; `errors.used_in` lists the
+        tables (soft-deleted rows are not counted): purchase, purchase order, requisition, MRR,
+        purchase return, sales, sales return, sales loan, sales loan return, quotation, delivery
+        challan, POS, invoice, booking, stock, stock summary, transfer, inventory adjustment,
+        inventory opening, BOM, WIP and LC lines. (The web list only hides the delete button for
+        products used by purchases, purchase orders or requisitions.)
+
+        Required permission: `module:product-manage.menu:product.permission:delete`
+      operationId: deleteProduct
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ProductId"
+
+      responses:
+        "200":
+          description: Product deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 223
+              example:
+                code: 200
+                success: true
+                message: Product deleted successfully.
+                data:
+                  id: 223
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/ProductNotFound"
+
+        "409":
+          description: The product is still used by transaction or stock lines.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Product is in use and cannot be deleted.
+                errors:
+                  used_in: [purchases_details, sales_details, stocks, stock_summaries]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "500":
+          description: The product could not be deleted; nothing is changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 500
+                success: false
+                message: Product could not be deleted.
+                errors: Server Error
+
+  /products/{id}/status:
+    patch:
+      tags:
+        - Products
+      summary: Change product status
+      description: |
+        Sets the product's status to `Approved` or `Inactive`. Only the status changes; the other
+        fields and images stay as they are.
+
+        Required permission: `module:product-manage.menu:product.permission:change-status`
+      operationId: updateProductStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/ProductId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Product"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 1
+                  company_id: 1
+                  code: null
+                  name: Silicone Softener WM-80
+                  category_id: 7
+                  category_name: Silicone
+                  brand_id: 1
+                  brand_name: Brand1
+                  unit_id: 1
+                  unit_name: KG
+                  product_type_id: 3
+                  product_type_name: Raw Material & Finished Good
+                  purchases_price: "1.810000"
+                  sale_price: "2.300000"
+                  sd_rate: null
+                  vat_rate: null
+                  low_stock: "100.000000"
+                  description: null
+                  image: null
+                  image_url: null
+                  images: []
+                  status: Inactive
+                  created_at: "2025-01-18T10:14:49.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/ProductNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`; nothing is saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
 components:
   securitySchemes:
     sessionCookie:
@@ -9965,6 +10647,17 @@ components:
       schema:
         type: integer
       example: 13
+
+    ProductId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Product ID. An unknown, soft-deleted or non-numeric ID, or a product of another company,
+        returns `404`.
+      schema:
+        type: integer
+      example: 1
 
   schemas:
     SuccessEnvelope:
@@ -11093,6 +11786,184 @@ components:
           description: Optional; saved as sent (`null` when not sent).
           example: null
 
+    Product:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        company_id:
+          type: integer
+          example: 1
+        code:
+          type: [string, "null"]
+          example: null
+        name:
+          type: [string, "null"]
+          example: Silicone Softener WM-80
+        category_id:
+          type: [integer, "null"]
+          example: 7
+        category_name:
+          type: [string, "null"]
+          example: Silicone
+        brand_id:
+          type: [integer, "null"]
+          example: 1
+        brand_name:
+          type: [string, "null"]
+          example: Brand1
+        unit_id:
+          type: [integer, "null"]
+          example: 1
+        unit_name:
+          type: [string, "null"]
+          example: KG
+        product_type_id:
+          type: [integer, "null"]
+          example: 3
+        product_type_name:
+          type: [string, "null"]
+          example: Raw Material & Finished Good
+        purchases_price:
+          type: [string, "null"]
+          description: Decimal string with 6 places, or `null`.
+          example: "1.810000"
+        sale_price:
+          type: [string, "null"]
+          description: Decimal string with 6 places, or `null`.
+          example: "2.300000"
+        sd_rate:
+          type: [string, "null"]
+          description: Supplementary duty rate, or `null`.
+          example: null
+        vat_rate:
+          type: [string, "null"]
+          description: VAT rate, or `null`.
+          example: null
+        low_stock:
+          type: [string, "null"]
+          description: Decimal string with 6 places, or `null`.
+          example: "100.000000"
+        description:
+          type: [string, "null"]
+          example: null
+        image:
+          type: [string, "null"]
+          description: Path of the main image (the last of `images`), or `null`.
+          example: null
+        image_url:
+          type: [string, "null"]
+          description: Public URL of `image`, or `null`.
+          example: null
+        images:
+          type: array
+          description: |
+            All images of the product. To keep an image in `PUT /products/{id}`, send its `path`
+            in `images`.
+          items:
+            $ref: "#/components/schemas/ProductImage"
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2025-01-18T10:14:49.000000Z"
+
+    ProductImage:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        path:
+          type: string
+          example: public/uploads/product/223/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+        url:
+          type: [string, "null"]
+          description: Public URL (needs `php artisan storage:link` on the server).
+          example: https://backend-fintrack360.eduguard360.com/storage/uploads/product/223/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+
+    ProductRequest:
+      type: object
+      description: |
+        Product fields. Required / optional comes from the web form settings: `name` and `unit_id`
+        are required on create. On update every field is optional (see the endpoint).
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          description: |
+            2–100 characters. Must be unique among products that are not soft-deleted (all
+            companies).
+          example: Silicone Softener WM-90
+        code:
+          type: [string, "null"]
+          maxLength: 20
+          description: |
+            Up to 20 characters. Must be unique among **all** products, including soft-deleted
+            ones (database unique index). Not generated automatically.
+          example: PID0001
+        unit_id:
+          type: integer
+          description: An existing, not soft-deleted product unit.
+          example: 1
+        category_id:
+          type: [integer, "null"]
+          description: An existing, not soft-deleted category.
+          example: 7
+        brand_id:
+          type: [integer, "null"]
+          description: An existing, not soft-deleted brand.
+          example: 1
+        product_type_id:
+          type: [integer, "null"]
+          description: An existing, not soft-deleted product type.
+          example: 3
+        purchases_price:
+          type: [number, "null"]
+          minimum: 0
+          example: 1.9
+        sale_price:
+          type: [number, "null"]
+          minimum: 0
+          example: 2.5
+        sd_rate:
+          type: [number, "null"]
+          minimum: 0
+          description: Supplementary duty rate.
+          example: 0
+        vat_rate:
+          type: [number, "null"]
+          minimum: 0
+          example: 15
+        low_stock:
+          type: [number, "null"]
+          minimum: 0
+          example: 100
+        description:
+          type: [string, "null"]
+          example: null
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          description: Optional; cannot be empty when sent. Create defaults to `Approved`.
+          example: Approved
+        images:
+          type: array
+          maxItems: 10
+          description: |
+            Up to 10 distinct paths. Each must be a path returned by `POST /products/images` to the
+            logged-in user (and not yet cleaned up), or — on update — the `path` of one of the
+            product's current images.
+          items:
+            type: string
+          example:
+            - public/uploads/product/tmp/2/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+
     Decimal:
       type: [string, number]
       description: Decimal value. Usually a string such as `"21754.0000"`; can be the number `0`.
@@ -12196,6 +13067,112 @@ components:
                 errors:
                   status:
                     - The selected status is invalid.
+
+    ProductNotFound:
+      description: No product with this ID in the logged-in user's company, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    ProductSaveFailed:
+      description: |
+        The product could not be saved (a database or file error); nothing is saved. The reason is
+        written to the server log.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 500
+            success: false
+            message: Product could not be saved.
+            errors: Server Error
+
+    ProductValidationError:
+      description: Request validation failed; nothing is saved.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingName:
+              summary: Create, or update with name sent empty — name missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+            duplicateName:
+              summary: Name already used by another product
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken. "
+                errors:
+                  name:
+                    - The name has already been taken.
+            missingUnit:
+              summary: Create, or update with unit_id sent empty — unit missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The unit id field is required. "
+                errors:
+                  unit_id:
+                    - The unit id field is required.
+            invalidBrand:
+              summary: Brand (or category / unit / product type) does not exist
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected brand id is invalid. "
+                errors:
+                  brand_id:
+                    - The selected brand id is invalid.
+            priceNotNumber:
+              summary: A price / rate / low stock is not a number
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The sale price must be a number. "
+                errors:
+                  sale_price:
+                    - The sale price must be a number.
+            longCode:
+              summary: Code longer than 20 characters
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The code must not be greater than 20 characters. "
+                errors:
+                  code:
+                    - The code must not be greater than 20 characters.
+            emptyStatus:
+              summary: Status sent empty
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The status field is required. "
+                errors:
+                  status:
+                    - The status field is required.
+            invalidImage:
+              summary: Image path is not an upload of this user (or expired) nor an image of this product
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The images.0 must be a path from POST /products/images (uploaded within 24 hours) or an image of this product. "
+                errors:
+                  images.0:
+                    - The images.0 must be a path from POST /products/images (uploaded within 24 hours) or an image of this product.
 
     AccountGroupNotFound:
       description: |
