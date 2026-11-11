@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.18.0
+  version: 1.19.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -44,7 +44,7 @@ info:
     `exception`, `file`, `line` and `trace`. Production must run with `APP_DEBUG=false`.
 
     ## Permissions
-    Role, branch, store, division, district, department, customer group, customer media, supplier group, unit,
+    Role, branch, store, division, district, upazila, department, customer group, customer media, supplier group, unit,
     brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason, inventory adjustment reason, cost center, non-inventory, account group and product endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
@@ -82,6 +82,8 @@ tags:
     description: Division management (Settings → Division)
   - name: Districts
     description: District management (Settings → District)
+  - name: Upazilas
+    description: Upazila management (Settings → Upazila)
   - name: Departments
     description: Department management (Settings → Department)
   - name: Customer Groups
@@ -2618,6 +2620,461 @@ paths:
 
         "404":
           $ref: "#/components/responses/DistrictNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+  /upazilas:
+    get:
+      tags:
+        - Upazilas
+      summary: List upazilas
+      description: |
+        Paginated list of upazilas (API version of the web list `admin/upazila-list`). Upazilas
+        are not filtered by company (same as the web list). Soft-deleted upazilas are not listed.
+        Each upazila includes its district (`district`). Use `district_id` to get the upazilas of
+        one district (as the web `admin/upazila-list-by-district-id` does, for example for a
+        dropdown). The upazilas are in `data.items` and the pagination info in `data.pagination`.
+
+        Required permission: `module:system-configuration.menu:upazila.permission:view`
+      operationId: listUpazilas
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name, Bangla name or URL.
+          schema:
+            type: string
+          example: Test
+        - name: district_id
+          in: query
+          description: Only the upazilas of this district. A non-numeric value is ignored.
+          schema:
+            type: integer
+          example: 1
+        - name: status
+          in: query
+          description: Only upazilas with this status.
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Upazila list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Upazila"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 1
+                      company_id: 1
+                      district_id: 1
+                      district:
+                        id: 1
+                        name: Test District
+                      name: Test Upazila
+                      bn_name: টেস্ট উপজেলা
+                      url: test-upazila.example.com
+                      status: Approved
+                      created_at: "2025-01-18T10:02:08.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 1
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Upazilas
+      summary: Create upazila
+      description: |
+        Creates an upazila (API version of the web form `admin/upazila-create`). The validation
+        rules are the same as the web form, read from the upazila form settings, plus:
+
+        - `district_id` must be an existing (not soft-deleted) district.
+        - `name` must be unique **within the district** (not case-sensitive; soft-deleted upazilas
+          are not counted). Different districts may have upazilas with the same name.
+        - `bn_name` may be at most 100 characters and `url` at most 255.
+        - `url` must be a full URL with a scheme (`https://sample-upazila.example.com`).
+        - `status` is optional: `Approved` when not sent; when sent it must be `Approved`,
+          `Inactive`, `Pending` or `Cancel` and cannot be empty.
+
+        `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:system-configuration.menu:upazila.permission:create`
+      operationId: createUpazila
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/UpazilaRequest"
+                - type: object
+                  required:
+                    - district_id
+                    - name
+            example:
+              district_id: 1
+              name: Sample Upazila
+              bn_name: নমুনা উপজেলা
+              url: https://sample-upazila.example.com
+
+      responses:
+        "201":
+          description: Upazila created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Upazila"
+              example:
+                code: 201
+                success: true
+                message: Upazila created successfully.
+                data:
+                  id: 22
+                  company_id: 1
+                  district_id: 1
+                  district:
+                    id: 1
+                    name: Test District
+                  name: Sample Upazila
+                  bn_name: নমুনা উপজেলা
+                  url: https://sample-upazila.example.com
+                  status: Approved
+                  created_at: "2026-11-11T09:20:31.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/UpazilaValidationError"
+
+  /upazilas/{id}:
+    put:
+      tags:
+        - Upazilas
+      summary: Update upazila
+      description: |
+        Updates an upazila (API version of the web edit form `admin/upazila-edit/{id}`). This is
+        a **partial update**:
+
+        - A field that is **not sent** keeps its current value.
+        - A field sent **empty** (`""` or `null`) is saved as `null`. `district_id` and `name`
+          are required, so sending them empty returns `422`.
+        - Sent fields use the same rules as create. The name must stay unique within the
+          district the upazila ends up in: changing only `name` checks the current district;
+          changing only `district_id` checks the current name in the new district. The upazila's
+          own name may be kept.
+        - `url` is checked only when sent, so an upazila with an older URL without a scheme can
+          still be changed without sending `url`.
+        - `status` is changed only when sent (`Approved`, `Inactive`, `Pending` or `Cancel`;
+          cannot be empty); otherwise the current status is kept.
+        - `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:system-configuration.menu:upazila.permission:edit`
+      operationId: updateUpazila
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/UpazilaId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpazilaRequest"
+            examples:
+              bnNameOnly:
+                summary: Change only the Bangla name
+                value:
+                  bn_name: টেস্ট উপজেলা ২
+              moveAndRename:
+                summary: Move to another district, rename and change status
+                value:
+                  district_id: 2
+                  name: Test Upazila 2
+                  status: Inactive
+              clearUrl:
+                summary: Clear the URL
+                value:
+                  url: ""
+
+      responses:
+        "200":
+          description: Upazila updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Upazila"
+              example:
+                code: 200
+                success: true
+                message: Upazila updated successfully.
+                data:
+                  id: 1
+                  company_id: 1
+                  district_id: 1
+                  district:
+                    id: 1
+                    name: Test District
+                  name: Test Upazila
+                  bn_name: টেস্ট উপজেলা ২
+                  url: test-upazila.example.com
+                  status: Approved
+                  created_at: "2025-01-18T10:02:08.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/UpazilaNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/UpazilaValidationError"
+
+    delete:
+      tags:
+        - Upazilas
+      summary: Delete upazila
+      description: |
+        Soft-deletes an upazila (`deleted_at` is set; the row stays in the database). A deleted
+        upazila is no longer listed, returns `404` on every other endpoint, and its name can be
+        used again in its district.
+
+        The upazila cannot be deleted (`409`) when it is used by any union, customer or supplier
+        (`upazila_id`; soft-deleted rows are not counted). `errors.used_in` lists which tables.
+        The web deletes without this check; the API blocks the delete on the server.
+
+        Required permission: `module:system-configuration.menu:upazila.permission:delete`
+      operationId: deleteUpazila
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/UpazilaId"
+
+      responses:
+        "200":
+          description: Upazila deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 22
+              example:
+                code: 200
+                success: true
+                message: Upazila deleted successfully.
+                data:
+                  id: 22
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/UpazilaNotFound"
+
+        "409":
+          description: The upazila is still in use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Upazila is in use and cannot be deleted.
+                errors:
+                  used_in: [unions, customers]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /upazilas/{id}/status:
+    patch:
+      tags:
+        - Upazilas
+      summary: Change upazila status
+      description: |
+        Sets the upazila's status to `Approved` or `Inactive`. Only the status changes.
+
+        Required permission: `module:system-configuration.menu:upazila.permission:change-status`
+      operationId: updateUpazilaStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/UpazilaId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Upazila"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 1
+                  company_id: 1
+                  district_id: 1
+                  district:
+                    id: 1
+                    name: Test District
+                  name: Test Upazila
+                  bn_name: টেস্ট উপজেলা
+                  url: test-upazila.example.com
+                  status: Inactive
+                  created_at: "2025-01-18T10:02:08.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/UpazilaNotFound"
 
         "419":
           $ref: "#/components/responses/CsrfMismatch"
@@ -10460,6 +10917,17 @@ components:
         type: integer
       example: 65
 
+    UpazilaId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Upazila ID. An unknown, soft-deleted or non-numeric ID returns `404`. Upazilas are not
+        filtered by company.
+      schema:
+        type: integer
+      example: 1
+
     DepartmentId:
       name: id
       in: path
@@ -11084,6 +11552,83 @@ components:
           maxLength: 255
           description: Full URL with a scheme (`https://…`).
           example: https://api.gov.bd
+
+    Upazila:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        company_id:
+          type: integer
+          example: 1
+        district_id:
+          type: integer
+          example: 1
+        district:
+          type: [object, "null"]
+          description: The upazila's district (`null` if the district was deleted).
+          properties:
+            id:
+              type: integer
+              example: 1
+            name:
+              type: [string, "null"]
+              example: Test District
+        name:
+          type: [string, "null"]
+          example: Test Upazila
+        bn_name:
+          type: [string, "null"]
+          description: Name in Bangla.
+          example: টেস্ট উপজেলা
+        url:
+          type: [string, "null"]
+          description: Website. Older rows may hold a URL without a scheme (`test-upazila.example.com`).
+          example: test-upazila.example.com
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2025-01-18T10:02:08.000000Z"
+
+    UpazilaRequest:
+      type: object
+      description: |
+        Upazila fields. Rules come from the upazila form settings (same as the web form), plus an
+        existing district and a name unique within the district. `district_id` and `name` are
+        required on create; on update every field is optional (see the endpoint).
+      properties:
+        district_id:
+          type: integer
+          description: Existing (not soft-deleted) district.
+          example: 1
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          description: |
+            Unique within the district (not case-sensitive; soft-deleted upazilas not counted).
+            Other districts may use the same name.
+          example: Sample Upazila
+        bn_name:
+          type: [string, "null"]
+          maxLength: 100
+          example: নমুনা উপজেলা
+        url:
+          type: [string, "null"]
+          format: uri
+          maxLength: 255
+          description: Full URL with a scheme (`https://…`).
+          example: https://sample-upazila.example.com
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          description: Optional; cannot be empty when sent. Create defaults to `Approved`.
+          example: Approved
 
     Department:
       type: object
@@ -12488,6 +13033,71 @@ components:
                     - The url must be a valid URL.
             invalidStatus:
               summary: Update only — status not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    UpazilaNotFound:
+      description: No upazila with this ID, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    UpazilaValidationError:
+      description: Request validation failed; nothing is saved.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            duplicateName:
+              summary: Name already used by another upazila of the same district
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken. "
+                errors:
+                  name:
+                    - The name has already been taken.
+            missingName:
+              summary: Create, or update with name sent empty — name missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+            invalidDistrict:
+              summary: District does not exist or is soft-deleted
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected district id is invalid. "
+                errors:
+                  district_id:
+                    - The selected district id is invalid.
+            invalidUrl:
+              summary: URL without a scheme
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The url must be a valid URL. "
+                errors:
+                  url:
+                    - The url must be a valid URL.
+            invalidStatus:
+              summary: Status empty or not Approved / Inactive / Pending / Cancel
               value:
                 code: 422
                 success: false
