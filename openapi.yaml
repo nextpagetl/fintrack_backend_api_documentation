@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.21.0
+  version: 1.22.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -44,7 +44,7 @@ info:
     `exception`, `file`, `line` and `trace`. Production must run with `APP_DEBUG=false`.
 
     ## Permissions
-    Role, branch, store, division, district, upazila, union, employee, department, customer group, customer media, supplier group, unit,
+    Role, branch, store, division, district, upazila, union, employee, department, customer group, customer media, customer, supplier group, unit,
     brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason, inventory adjustment reason, cost center, non-inventory, account group and product endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
@@ -94,6 +94,8 @@ tags:
     description: Customer group management (Customer Manage → Customer Group)
   - name: Customer Media
     description: Customer media (customer source) management (Customer Manage → Customer Media)
+  - name: Customers
+    description: Customer management (Customer Manage → Customer)
   - name: Supplier Groups
     description: Supplier group management (Supplier Manage → Supplier Group)
   - name: Units
@@ -5234,6 +5236,611 @@ paths:
 
         "404":
           $ref: "#/components/responses/CustomerMediaNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+  /customers:
+    get:
+      tags:
+        - Customers
+      summary: List customers
+      description: |
+        Paginated list of customers (API version of the web list `admin/sales-setup-customer-list`).
+        Only customers of the **logged-in user's company** are listed (same as the web list).
+        Soft-deleted customers are not listed. Each customer includes the names of its customer
+        group, branch, media, sales representative and location. The customers are in
+        `data.items` and the pagination info in `data.pagination`.
+
+        Required permission: `module:customer-manage.menu:customer.permission:view`
+      operationId: listCustomers
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: |
+            Partial match on ID, code, name, email, phone, TIN, or the customer group, branch or
+            sales representative name.
+          schema:
+            type: string
+          example: Test
+        - name: customer_type
+          in: query
+          description: Only customers of this customer group. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: branch_id
+          in: query
+          description: Only customers of this branch. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: sr_id
+          in: query
+          description: Only customers of this sales representative (employee). A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: media_id
+          in: query
+          description: Only customers of this customer media. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: division_id
+          in: query
+          description: Only customers of this division. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: district_id
+          in: query
+          description: Only customers of this district. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: upazila_id
+          in: query
+          description: Only customers of this upazila. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: union_id
+          in: query
+          description: Only customers of this union. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: status
+          in: query
+          description: Only customers with this status.
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, code, name, email, phone, credit_limit, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Customer list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Customer"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 5
+                      company_id: 1
+                      code: CUST0005
+                      name: Test Customer
+                      contact_person: Test Contact
+                      customer_type: 1
+                      customer_group:
+                        id: 1
+                        name: Test Group
+                      branch_id: 1
+                      branch:
+                        id: 1
+                        name: Test Branch
+                      media_id: 1
+                      media:
+                        id: 1
+                        name: Test Media
+                      sr_id: 3
+                      sales_representative:
+                        id: 3
+                        name: Test Employee
+                      email: test.customer@example.com
+                      phone: "01700000011"
+                      address: Test Road 1, Test City
+                      credit_limit: "5000.000000"
+                      tax_identification_number: null
+                      division_id: 1
+                      division:
+                        id: 1
+                        name: Test Division
+                      district_id: 1
+                      district:
+                        id: 1
+                        name: Test District
+                      upazila_id: 1
+                      upazila:
+                        id: 1
+                        name: Test Upazila
+                      union_id: 1
+                      union:
+                        id: 1
+                        name: Test Union
+                      pay_term: null
+                      pay_term_type: null
+                      status: Approved
+                      created_at: "2025-01-18T10:02:08.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 1
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Customers
+      summary: Create customer
+      description: |
+        Creates a customer (API version of the web form `admin/sales-setup-customer-create`). The
+        validation rules are the same as the web form, read from the customer form settings, plus
+        existing related records and the column lengths — see `CustomerRequest`.
+
+        - `name` and `customer_type` (customer group of the logged-in user's company) are required.
+        - `phone` is optional and **not** unique (same as the web form).
+        - `code` is saved as sent; it is not generated.
+        - `branch_id` defaults to the company's default branch when not sent.
+        - The location must fit together: `district_id` must be of `division_id`, `upazila_id` of
+          `district_id` and `union_id` of `upazila_id`; a lower level needs the level above it.
+        - `status` is optional: `Approved` when not sent; when sent it must be `Approved`,
+          `Inactive`, `Pending` or `Cancel` and cannot be empty.
+
+        `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:customer-manage.menu:customer.permission:create`
+      operationId: createCustomer
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/CustomerRequest"
+                - type: object
+                  required:
+                    - name
+                    - customer_type
+            example:
+              name: Sample Customer
+              customer_type: 1
+              code: CUST0006
+              phone: "01700000012"
+              email: sample.customer@example.com
+              address: Test Road 2, Test City
+              credit_limit: 10000
+              sr_id: 3
+              media_id: 1
+              division_id: 1
+              district_id: 1
+              upazila_id: 1
+              union_id: 1
+
+      responses:
+        "201":
+          description: Customer created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Customer"
+              example:
+                code: 201
+                success: true
+                message: Customer created successfully.
+                data:
+                  id: 1737
+                  company_id: 1
+                  code: CUST0006
+                  name: Sample Customer
+                  contact_person: null
+                  customer_type: 1
+                  customer_group:
+                    id: 1
+                    name: Test Group
+                  branch_id: 1
+                  branch:
+                    id: 1
+                    name: Test Branch
+                  media_id: 1
+                  media:
+                    id: 1
+                    name: Test Media
+                  sr_id: 3
+                  sales_representative:
+                    id: 3
+                    name: Test Employee
+                  email: sample.customer@example.com
+                  phone: "01700000012"
+                  address: Test Road 2, Test City
+                  credit_limit: "10000.000000"
+                  tax_identification_number: null
+                  division_id: 1
+                  division:
+                    id: 1
+                    name: Test Division
+                  district_id: 1
+                  district:
+                    id: 1
+                    name: Test District
+                  upazila_id: 1
+                  upazila:
+                    id: 1
+                    name: Test Upazila
+                  union_id: 1
+                  union:
+                    id: 1
+                    name: Test Union
+                  pay_term: null
+                  pay_term_type: null
+                  status: Approved
+                  created_at: "2026-11-11T12:10:05.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/CustomerValidationError"
+
+  /customers/{id}:
+    put:
+      tags:
+        - Customers
+      summary: Update customer
+      description: |
+        Updates a customer (API version of the web edit form `admin/sales-setup-customer-edit/{id}`).
+        This is a **partial update**:
+
+        - A field that is **not sent** keeps its current value.
+        - A field sent **empty** (`""` or `null`) is saved as `null`. `name` and `customer_type`
+          are required, so sending them empty returns `422`. An empty `branch_id` becomes the
+          company's default branch (same as the web form).
+        - Sent fields use the same rules as create.
+        - When any location field (`division_id`, `district_id`, `upazila_id`, `union_id`) is
+          sent, the resulting location — sent values, or the current ones — must fit together.
+          For example, changing only `division_id` fails when the current district is not of the
+          new division; send the new `district_id` (and lower levels) too, or empty them.
+        - `status` is changed only when sent (`Approved`, `Inactive`, `Pending` or `Cancel`;
+          cannot be empty); otherwise the current status is kept.
+        - `company_id` is set to the logged-in user's company (the customer is already of that
+          company).
+
+        Required permission: `module:customer-manage.menu:customer.permission:edit`
+      operationId: updateCustomer
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CustomerId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerRequest"
+            examples:
+              emailOnly:
+                summary: Change only the email
+                value:
+                  email: new.customer@example.com
+              moveLocation:
+                summary: Move to another location (whole chain)
+                value:
+                  division_id: 2
+                  district_id: 3
+                  upazila_id: 4
+                  union_id: 5
+              clearLocation:
+                summary: Remove the location
+                value:
+                  division_id: null
+                  district_id: null
+                  upazila_id: null
+                  union_id: null
+              statusOnly:
+                summary: Change only the status
+                value:
+                  status: Inactive
+
+      responses:
+        "200":
+          description: Customer updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Customer"
+              example:
+                code: 200
+                success: true
+                message: Customer updated successfully.
+                data:
+                  id: 5
+                  company_id: 1
+                  code: CUST0005
+                  name: Test Customer
+                  contact_person: Test Contact
+                  customer_type: 1
+                  customer_group:
+                    id: 1
+                    name: Test Group
+                  branch_id: 1
+                  branch:
+                    id: 1
+                    name: Test Branch
+                  media_id: 1
+                  media:
+                    id: 1
+                    name: Test Media
+                  sr_id: 3
+                  sales_representative:
+                    id: 3
+                    name: Test Employee
+                  email: new.customer@example.com
+                  phone: "01700000011"
+                  address: Test Road 1, Test City
+                  credit_limit: "5000.000000"
+                  tax_identification_number: null
+                  division_id: 1
+                  division:
+                    id: 1
+                    name: Test Division
+                  district_id: 1
+                  district:
+                    id: 1
+                    name: Test District
+                  upazila_id: 1
+                  upazila:
+                    id: 1
+                    name: Test Upazila
+                  union_id: 1
+                  union:
+                    id: 1
+                    name: Test Union
+                  pay_term: null
+                  pay_term_type: null
+                  status: Approved
+                  created_at: "2025-01-18T10:02:08.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/CustomerNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/CustomerValidationError"
+
+    delete:
+      tags:
+        - Customers
+      summary: Delete customer
+      description: |
+        Soft-deletes a customer (`deleted_at` is set; the row stays in the database). A deleted
+        customer is no longer listed and returns `404` on every other endpoint.
+
+        The customer cannot be deleted (`409`) when any of these tables still uses it
+        (`customer_id`; soft-deleted rows are not counted); `errors.used_in` lists which:
+        `sales`, `sale_payments`, `sale_payment_details`, `sale_pending_cheques`, `sale_returns`,
+        `sale_return_wihout_refs`, `sales_loans`, `sales_loan_returns`, `sales_quatations`,
+        `delivery_challans`, `pos`, `bookings`, `credit_notes`, `debit_notes`, `payment_vouchers`,
+        `receive_vouchers`, `journal_vouchers`, `contra_vouchers`, `service_invoices`,
+        `service_payments`, `service_pending_cheques`, `service_quatations`,
+        `customer_opening_details`, `inovices`, `users`. (The web list only hides the delete
+        button for customers with opening balances or payments.)
+
+        Required permission: `module:customer-manage.menu:customer.permission:delete`
+      operationId: deleteCustomer
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CustomerId"
+
+      responses:
+        "200":
+          description: Customer deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 1737
+              example:
+                code: 200
+                success: true
+                message: Customer deleted successfully.
+                data:
+                  id: 1737
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/CustomerNotFound"
+
+        "409":
+          description: The customer is still in use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Customer is in use and cannot be deleted.
+                errors:
+                  used_in: [sales, sale_payments, customer_opening_details]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /customers/{id}/status:
+    patch:
+      tags:
+        - Customers
+      summary: Change customer status
+      description: |
+        Sets the customer's status to `Approved` or `Inactive`. Only the status changes.
+
+        Required permission: `module:customer-manage.menu:customer.permission:change-status`
+      operationId: updateCustomerStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CustomerId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated. `data` is the customer (see `Customer`) with the new status.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Customer"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/CustomerNotFound"
 
         "419":
           $ref: "#/components/responses/CsrfMismatch"
@@ -11939,6 +12546,17 @@ components:
         type: integer
       example: 2
 
+    CustomerId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Customer ID. An unknown, soft-deleted or non-numeric ID, or a customer of another company,
+        returns `404`.
+      schema:
+        type: integer
+      example: 5
+
     SupplierGroupId:
       name: id
       in: path
@@ -12890,6 +13508,198 @@ components:
         characters. Must be unique in the whole table — all companies, soft-deleted customer media
         included (not case-sensitive) — because `customer_media.name` has a unique index.
       example: Facebook
+
+    NamedRef:
+      type: [object, "null"]
+      description: A related record's ID and name, or `null` when not set or deleted.
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: [string, "null"]
+          example: Test Name
+
+    Customer:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 5
+        company_id:
+          type: integer
+          example: 1
+        code:
+          type: [string, "null"]
+          example: CUST0005
+        name:
+          type: [string, "null"]
+          example: Test Customer
+        contact_person:
+          type: [string, "null"]
+          example: Test Contact
+        customer_type:
+          type: [integer, "null"]
+          description: Customer group ID.
+          example: 1
+        customer_group:
+          $ref: "#/components/schemas/NamedRef"
+        branch_id:
+          type: [integer, "null"]
+          example: 1
+        branch:
+          $ref: "#/components/schemas/NamedRef"
+        media_id:
+          type: [integer, "null"]
+          example: 1
+        media:
+          $ref: "#/components/schemas/NamedRef"
+        sr_id:
+          type: [integer, "null"]
+          description: Sales representative (employee) ID.
+          example: 3
+        sales_representative:
+          $ref: "#/components/schemas/NamedRef"
+        email:
+          type: [string, "null"]
+          example: test.customer@example.com
+        phone:
+          type: [string, "null"]
+          example: "01700000011"
+        address:
+          type: [string, "null"]
+          example: Test Road 1, Test City
+        credit_limit:
+          type: [string, "null"]
+          description: Decimal string with 6 places, or `null`.
+          example: "5000.000000"
+        tax_identification_number:
+          type: [string, "null"]
+          example: null
+        division_id:
+          type: [integer, "null"]
+          example: 1
+        division:
+          $ref: "#/components/schemas/NamedRef"
+        district_id:
+          type: [integer, "null"]
+          example: 1
+        district:
+          $ref: "#/components/schemas/NamedRef"
+        upazila_id:
+          type: [integer, "null"]
+          example: 1
+        upazila:
+          $ref: "#/components/schemas/NamedRef"
+        union_id:
+          type: [integer, "null"]
+          example: 1
+        union:
+          $ref: "#/components/schemas/NamedRef"
+        pay_term:
+          type: [string, "null"]
+          example: null
+        pay_term_type:
+          type: [string, "null"]
+          example: null
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2025-01-18T10:02:08.000000Z"
+
+    CustomerRequest:
+      type: object
+      description: |
+        Customer fields. Rules come from the customer form settings (same as the web form), plus
+        existing related records, the column lengths and a location chain that fits together.
+        `name` and `customer_type` are required on create; on update every field is optional
+        (see the endpoint).
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: Sample Customer
+        customer_type:
+          type: integer
+          description: Customer group of the logged-in user's company (not soft-deleted).
+          example: 1
+        code:
+          type: [string, "null"]
+          maxLength: 255
+          description: Saved as sent; not generated.
+          example: CUST0006
+        contact_person:
+          type: [string, "null"]
+          maxLength: 255
+          example: Test Contact
+        phone:
+          type: [string, "null"]
+          maxLength: 20
+          description: Not unique (same as the web form).
+          example: "01700000012"
+        email:
+          type: [string, "null"]
+          format: email
+          maxLength: 55
+          example: sample.customer@example.com
+        address:
+          type: [string, "null"]
+          maxLength: 200
+          example: Test Road 2, Test City
+        credit_limit:
+          type: [number, "null"]
+          minimum: 0
+          example: 10000
+        tax_identification_number:
+          type: [string, "null"]
+          maxLength: 255
+          example: null
+        pay_term:
+          type: [string, "null"]
+          maxLength: 255
+          example: null
+        pay_term_type:
+          type: [string, "null"]
+          maxLength: 255
+          example: null
+        branch_id:
+          type: [integer, "null"]
+          description: An existing, not soft-deleted branch. Defaults to the company's default branch.
+          example: 1
+        media_id:
+          type: [integer, "null"]
+          description: Customer media of the logged-in user's company (not soft-deleted).
+          example: 1
+        sr_id:
+          type: [integer, "null"]
+          description: Sales representative — an employee of the logged-in user's company (not soft-deleted).
+          example: 3
+        division_id:
+          type: [integer, "null"]
+          description: An existing, not soft-deleted division. Required when `district_id` is set.
+          example: 1
+        district_id:
+          type: [integer, "null"]
+          description: A district of `division_id`. Required when `upazila_id` is set.
+          example: 1
+        upazila_id:
+          type: [integer, "null"]
+          description: An upazila of `district_id`. Required when `union_id` is set.
+          example: 1
+        union_id:
+          type: [integer, "null"]
+          description: A union of `upazila_id`.
+          example: 1
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          description: Optional; cannot be empty when sent. Create defaults to `Approved`.
+          example: Approved
 
     SupplierGroup:
       type: object
@@ -14553,6 +15363,80 @@ components:
                     - The status field is required.
             invalidStatus:
               summary: Update only — status not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    CustomerNotFound:
+      description: No customer with this ID in the logged-in user's company, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    CustomerValidationError:
+      description: Request validation failed; nothing is saved.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingGroup:
+              summary: Create, or update with customer_type sent empty — customer group missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The customer type field is required. "
+                errors:
+                  customer_type:
+                    - The customer type field is required.
+            missingName:
+              summary: Create, or update with name sent empty — name missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+            districtNotOfDivision:
+              summary: The district is not of the division
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected district id does not belong to the selected division. "
+                errors:
+                  district_id:
+                    - The selected district id does not belong to the selected division.
+            missingParentLevel:
+              summary: A lower location level without the level above it
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The upazila id field is required when union id is present. "
+                errors:
+                  upazila_id:
+                    - The upazila id field is required when union id is present.
+            invalidSalesRepresentative:
+              summary: Sales representative does not exist or is of another company
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected sr id is invalid. "
+                errors:
+                  sr_id:
+                    - The selected sr id is invalid.
+            invalidStatus:
+              summary: Status empty or not Approved / Inactive / Pending / Cancel
               value:
                 code: 422
                 success: false
