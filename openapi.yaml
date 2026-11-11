@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.23.0
+  version: 1.24.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -44,7 +44,7 @@ info:
     `exception`, `file`, `line` and `trace`. Production must run with `APP_DEBUG=false`.
 
     ## Permissions
-    Role, branch, store, division, district, upazila, union, employee, department, customer group, customer media, customer, supplier group, unit,
+    Role, branch, store, division, district, upazila, union, employee, department, customer group, customer media, customer, supplier group, supplier, unit,
     brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason, inventory adjustment reason, cost center, non-inventory, account group, chart of account and product endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
@@ -98,6 +98,8 @@ tags:
     description: Customer management (Customer Manage → Customer)
   - name: Supplier Groups
     description: Supplier group management (Supplier Manage → Supplier Group)
+  - name: Suppliers
+    description: Supplier management (Supplier Manage → Supplier)
   - name: Units
     description: Product unit management (Product Manage → Unit)
   - name: Brands
@@ -6244,6 +6246,530 @@ paths:
 
         "404":
           $ref: "#/components/responses/SupplierGroupNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status is missing or not `Approved` / `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+  /suppliers:
+    get:
+      tags:
+        - Suppliers
+      summary: List suppliers
+      description: |
+        Paginated list of suppliers (API version of the web list `admin/inventory-setup-supplier-list`).
+        Only suppliers of the **logged-in user's company** are listed (same as the web list).
+        Soft-deleted suppliers are not listed. Each supplier includes the names of its supplier
+        group, branch and location. The suppliers are in `data.items` and the pagination info in
+        `data.pagination`.
+
+        Required permission: `module:supplier-manage.menu:supplier.permission:view`
+      operationId: listSuppliers
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, code, name, email, phone, TIN or supplier group name.
+          schema:
+            type: string
+          example: Test
+        - name: supplier_type
+          in: query
+          description: Only suppliers of this supplier group. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: branch_id
+          in: query
+          description: Only suppliers of this branch. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: division_id
+          in: query
+          description: Only suppliers of this division. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: district_id
+          in: query
+          description: Only suppliers of this district. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: upazila_id
+          in: query
+          description: Only suppliers of this upazila. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: union_id
+          in: query
+          description: Only suppliers of this union. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: status
+          in: query
+          description: Only suppliers with this status.
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, code, name, email, phone, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Supplier list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Supplier"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 7
+                      company_id: 1
+                      code: SID250100007
+                      name: Test Supplier
+                      contact_person: Test Contact
+                      supplier_type: 1
+                      supplier_group:
+                        id: 1
+                        name: Test Supplier Group
+                      branch_id: 1
+                      branch:
+                        id: 1
+                        name: Test Branch
+                      email: test.supplier@example.com
+                      phone: "01700000021"
+                      address: Test Road 1, Test City
+                      tax_identification_number: null
+                      division_id: 1
+                      division:
+                        id: 1
+                        name: Test Division
+                      district_id: 1
+                      district:
+                        id: 1
+                        name: Test District
+                      upazila_id: 1
+                      upazila:
+                        id: 1
+                        name: Test Upazila
+                      union_id: 1
+                      union:
+                        id: 1
+                        name: Test Union
+                      pay_term: null
+                      pay_term_type: null
+                      status: Approved
+                      created_at: "2025-01-18T10:02:08.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 1
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Suppliers
+      summary: Create supplier
+      description: |
+        Creates a supplier (API version of the web form `admin/inventory-setup-supplier-create`).
+        The validation rules are the same as the web form, read from the supplier form settings,
+        plus existing related records and the column lengths — see `SupplierRequest`.
+
+        - `name`, `supplier_type` (supplier group of the logged-in user's company) and `phone`
+          are required. `phone` must be a Bangladeshi number (the web form's phone rule, which
+          also checks branch phone numbers); it does not have to be unique.
+        - `email` is optional and unique among suppliers that are not soft-deleted.
+        - `code` is **generated** (`SID` + year + month + number); a sent `code` is ignored.
+        - The location must fit together: `district_id` must be of `division_id`, `upazila_id` of
+          `district_id` and `union_id` of `upazila_id`; a lower level needs the level above it.
+        - `status` is optional: `Approved` when not sent; when sent it must be `Approved`,
+          `Inactive`, `Pending` or `Cancel` and cannot be empty.
+
+        `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:supplier-manage.menu:supplier.permission:create`
+      operationId: createSupplier
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/SupplierRequest"
+                - type: object
+                  required:
+                    - name
+                    - supplier_type
+                    - phone
+            example:
+              name: Sample Supplier
+              supplier_type: 1
+              phone: "01700000022"
+              email: sample.supplier@example.com
+              contact_person: Test Contact
+              address: Test Road 2, Test City
+              branch_id: 1
+              division_id: 1
+              district_id: 1
+              upazila_id: 1
+              union_id: 1
+
+      responses:
+        "201":
+          description: Supplier created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Supplier"
+              example:
+                code: 201
+                success: true
+                message: Supplier created successfully.
+                data:
+                  id: 75
+                  company_id: 1
+                  code: SID261100074
+                  name: Sample Supplier
+                  contact_person: Test Contact
+                  supplier_type: 1
+                  supplier_group:
+                    id: 1
+                    name: Test Supplier Group
+                  branch_id: 1
+                  branch:
+                    id: 1
+                    name: Test Branch
+                  email: sample.supplier@example.com
+                  phone: "01700000022"
+                  address: Test Road 2, Test City
+                  tax_identification_number: null
+                  division_id: 1
+                  division:
+                    id: 1
+                    name: Test Division
+                  district_id: 1
+                  district:
+                    id: 1
+                    name: Test District
+                  upazila_id: 1
+                  upazila:
+                    id: 1
+                    name: Test Upazila
+                  union_id: 1
+                  union:
+                    id: 1
+                    name: Test Union
+                  pay_term: null
+                  pay_term_type: null
+                  status: Approved
+                  created_at: "2026-11-11T13:05:44.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/SupplierValidationError"
+
+  /suppliers/{id}:
+    put:
+      tags:
+        - Suppliers
+      summary: Update supplier
+      description: |
+        Updates a supplier (API version of the web edit form `admin/inventory-setup-supplier-edit/{id}`).
+        This is a **partial update**:
+
+        - A field that is **not sent** keeps its current value.
+        - A field sent **empty** (`""` or `null`) is saved as `null`. `name`, `supplier_type` and
+          `phone` are required, so sending them empty returns `422`.
+        - Sent fields use the same rules as create; the supplier's own email may be kept. `code`
+          can be changed here (as in the web edit form).
+        - When any location field (`division_id`, `district_id`, `upazila_id`, `union_id`) is
+          sent, the resulting location — sent values, or the current ones — must fit together.
+          For example, changing only `division_id` fails when the current district is not of the
+          new division.
+        - `status` is changed only when sent (`Approved`, `Inactive`, `Pending` or `Cancel`;
+          cannot be empty); otherwise the current status is kept.
+        - `company_id` is set to the logged-in user's company (the supplier is already of that
+          company).
+
+        Required permission: `module:supplier-manage.menu:supplier.permission:edit`
+      operationId: updateSupplier
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/SupplierId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/SupplierRequest"
+                - type: object
+                  properties:
+                    code:
+                      type: [string, "null"]
+                      maxLength: 255
+                      description: Update only; saved as sent.
+                      example: SUP-0001
+            examples:
+              addressOnly:
+                summary: Change only the address
+                value:
+                  address: Test Road 9, Test City
+              moveLocation:
+                summary: Move to another location (whole chain)
+                value:
+                  division_id: 2
+                  district_id: 3
+                  upazila_id: 4
+                  union_id: 5
+              statusOnly:
+                summary: Change only the status
+                value:
+                  status: Inactive
+
+      responses:
+        "200":
+          description: Supplier updated. `data` is the supplier (see `Supplier`) after the update.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Supplier"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/SupplierNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/SupplierValidationError"
+
+    delete:
+      tags:
+        - Suppliers
+      summary: Delete supplier
+      description: |
+        Soft-deletes a supplier (`deleted_at` is set; the row stays in the database). A deleted
+        supplier is no longer listed, returns `404` on every other endpoint, and its email can be
+        used again.
+
+        The supplier cannot be deleted (`409`) when any of these tables still uses it
+        (`supplier_id`; soft-deleted rows are not counted); `errors.used_in` lists which:
+        `purchases`, `purchases_orders`, `purchases_payments`, `purchases_payment_details`,
+        `purchases_pending_cheques`, `purchases_returns`, `payment_vouchers`, `receive_vouchers`,
+        `contra_vouchers`, `journal_vouchers`, `debit_notes`, `credit_notes`, `lcs`,
+        `supplier_opening_details`. (The web list only hides the delete button for suppliers with
+        purchases.)
+
+        Required permission: `module:supplier-manage.menu:supplier.permission:delete`
+      operationId: deleteSupplier
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/SupplierId"
+
+      responses:
+        "200":
+          description: Supplier deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 75
+              example:
+                code: 200
+                success: true
+                message: Supplier deleted successfully.
+                data:
+                  id: 75
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/SupplierNotFound"
+
+        "409":
+          description: The supplier is still in use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Supplier is in use and cannot be deleted.
+                errors:
+                  used_in: [purchases, purchases_payments, payment_vouchers]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /suppliers/{id}/status:
+    patch:
+      tags:
+        - Suppliers
+      summary: Change supplier status
+      description: |
+        Sets the supplier's status to `Approved` or `Inactive`. Only the status changes.
+
+        Required permission: `module:supplier-manage.menu:supplier.permission:change-status`
+      operationId: updateSupplierStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/SupplierId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated. `data` is the supplier (see `Supplier`) with the new status.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Supplier"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/SupplierNotFound"
 
         "419":
           $ref: "#/components/responses/CsrfMismatch"
@@ -13063,6 +13589,17 @@ components:
         type: integer
       example: 2
 
+    SupplierId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Supplier ID. An unknown, soft-deleted or non-numeric ID, or a supplier of another company,
+        returns `404`.
+      schema:
+        type: integer
+      example: 7
+
     BrandId:
       name: id
       in: path
@@ -14239,6 +14776,159 @@ components:
         limit (the size of the database column). Must be unique within the logged-in user's
         company (not case-sensitive, soft-deleted supplier groups not counted).
       example: Local Supplier
+
+    Supplier:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 7
+        company_id:
+          type: integer
+          example: 1
+        code:
+          type: [string, "null"]
+          example: SID250100007
+        name:
+          type: [string, "null"]
+          example: Test Supplier
+        contact_person:
+          type: [string, "null"]
+          example: Test Contact
+        supplier_type:
+          type: [integer, "null"]
+          description: Supplier group ID.
+          example: 1
+        supplier_group:
+          $ref: "#/components/schemas/NamedRef"
+        branch_id:
+          type: [integer, "null"]
+          example: 1
+        branch:
+          $ref: "#/components/schemas/NamedRef"
+        email:
+          type: [string, "null"]
+          example: test.supplier@example.com
+        phone:
+          type: [string, "null"]
+          example: "01700000021"
+        address:
+          type: [string, "null"]
+          example: Test Road 1, Test City
+        tax_identification_number:
+          type: [string, "null"]
+          example: null
+        division_id:
+          type: [integer, "null"]
+          example: 1
+        division:
+          $ref: "#/components/schemas/NamedRef"
+        district_id:
+          type: [integer, "null"]
+          example: 1
+        district:
+          $ref: "#/components/schemas/NamedRef"
+        upazila_id:
+          type: [integer, "null"]
+          example: 1
+        upazila:
+          $ref: "#/components/schemas/NamedRef"
+        union_id:
+          type: [integer, "null"]
+          example: 1
+        union:
+          $ref: "#/components/schemas/NamedRef"
+        pay_term:
+          type: [string, "null"]
+          example: null
+        pay_term_type:
+          type: [string, "null"]
+          example: null
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2025-01-18T10:02:08.000000Z"
+
+    SupplierRequest:
+      type: object
+      description: |
+        Supplier fields. Rules come from the supplier form settings (same as the web form), plus
+        existing related records, the column lengths and a location chain that fits together.
+        `name`, `supplier_type` and `phone` are required on create; on update every field is
+        optional (see the endpoint).
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: Sample Supplier
+        supplier_type:
+          type: integer
+          description: Supplier group of the logged-in user's company (not soft-deleted).
+          example: 1
+        phone:
+          type: string
+          maxLength: 20
+          description: |
+            A Bangladeshi number (for example `01700000022` or `+8801700000022`); the web form's
+            branch phone check is applied too. Not unique.
+          example: "01700000022"
+        email:
+          type: [string, "null"]
+          format: email
+          maxLength: 55
+          description: Unique among suppliers that are not soft-deleted.
+          example: sample.supplier@example.com
+        contact_person:
+          type: [string, "null"]
+          minLength: 2
+          maxLength: 100
+          example: Test Contact
+        address:
+          type: [string, "null"]
+          maxLength: 200
+          example: Test Road 2, Test City
+        tax_identification_number:
+          type: [string, "null"]
+          maxLength: 255
+          example: null
+        pay_term:
+          type: [string, "null"]
+          maxLength: 255
+          example: null
+        pay_term_type:
+          type: [string, "null"]
+          maxLength: 255
+          example: null
+        branch_id:
+          type: [integer, "null"]
+          description: An existing, not soft-deleted branch.
+          example: 1
+        division_id:
+          type: [integer, "null"]
+          description: An existing, not soft-deleted division. Required when `district_id` is set.
+          example: 1
+        district_id:
+          type: [integer, "null"]
+          description: A district of `division_id`. Required when `upazila_id` is set.
+          example: 1
+        upazila_id:
+          type: [integer, "null"]
+          description: An upazila of `district_id`. Required when `union_id` is set.
+          example: 1
+        union_id:
+          type: [integer, "null"]
+          description: A union of `upazila_id`.
+          example: 1
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          description: Optional; cannot be empty when sent. Create defaults to `Approved`.
+          example: Approved
 
     Unit:
       type: object
@@ -16069,6 +16759,80 @@ components:
                     - The name has already been taken.
             invalidStatus:
               summary: Update only — status missing or not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    SupplierNotFound:
+      description: No supplier with this ID in the logged-in user's company, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    SupplierValidationError:
+      description: Request validation failed; nothing is saved.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingPhone:
+              summary: Create, or update with phone sent empty — phone missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The phone field is required. "
+                errors:
+                  phone:
+                    - The phone field is required.
+            invalidPhone:
+              summary: Phone is not a Bangladeshi number
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The phone format is invalid. "
+                errors:
+                  phone:
+                    - The phone format is invalid.
+            duplicateEmail:
+              summary: Email already used by another supplier
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The email has already been taken. "
+                errors:
+                  email:
+                    - The email has already been taken.
+            missingGroup:
+              summary: Create, or update with supplier_type sent empty — supplier group missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The supplier type field is required. "
+                errors:
+                  supplier_type:
+                    - The supplier type field is required.
+            districtNotOfDivision:
+              summary: The district is not of the division
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected district id does not belong to the selected division. "
+                errors:
+                  district_id:
+                    - The selected district id does not belong to the selected division.
+            invalidStatus:
+              summary: Status empty or not Approved / Inactive / Pending / Cancel
               value:
                 code: 422
                 success: false
