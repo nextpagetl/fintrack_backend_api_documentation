@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.24.0
+  version: 1.25.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -45,7 +45,7 @@ info:
 
     ## Permissions
     Role, branch, store, division, district, upazila, union, employee, department, customer group, customer media, customer, supplier group, supplier, unit,
-    brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason, inventory adjustment reason, cost center, non-inventory, account group, chart of account and product endpoints also need a Spatie permission, named
+    brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason, inventory adjustment reason, cost center, non-inventory, account group, chart of account, product, customer opening, supplier opening, inventory opening and opening balance endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -130,6 +130,14 @@ tags:
     description: Chart of account management (Accounts Setup → Chart of Account)
   - name: Products
     description: Product management and product images (Product Manage → Product)
+  - name: Customer Openings
+    description: Customer opening balances (Opening → Customer Opening)
+  - name: Supplier Openings
+    description: Supplier opening balances (Opening → Supplier Opening)
+  - name: Inventory Openings
+    description: Opening inventory (Opening → Inventory Opening)
+  - name: Opening Balance
+    description: Account opening balances (Opening → Opening Balance)
 
 paths:
   /csrf-token:
@@ -13429,6 +13437,1374 @@ paths:
                   status:
                     - The selected status is invalid.
 
+  /customer-openings:
+    get:
+      tags:
+        - Customer Openings
+      summary: List customer openings
+      description: |
+        Paginated list of customer openings (API version of the web list
+        `admin/opening-setup-customer-opening-list`). Works like the web list:
+
+        - Only openings dated on or after the **opening date** (general setup `opening_date`)
+          are listed.
+        - There is **no company filter** (same as the web list).
+        - Soft-deleted openings and details are not listed.
+
+        Each opening is one item with its customers in `details`. The openings are in
+        `data.items` and the pagination info in `data.pagination`.
+
+        Required permission: `module:opening.menu:customer-opening.permission:view`
+      operationId: listCustomerOpenings
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, voucher no, total balance, or a customer's name or code.
+          schema:
+            type: string
+          example: COID
+        - name: status
+          in: query
+          description: Only openings with this status.
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+        - name: customer_id
+          in: query
+          description: Only openings that have this customer. A non-numeric value is ignored.
+          schema:
+            type: integer
+        - name: from_date
+          in: query
+          description: Only openings dated on or after this date.
+          schema:
+            type: string
+            format: date
+        - name: to_date
+          in: query
+          description: Only openings dated on or before this date.
+          schema:
+            type: string
+            format: date
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, voucher_no, date, total_balance, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Customer opening list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/CustomerOpening"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 209
+                      company_id: 1
+                      voucher_no: COID00000209
+                      date: "2024-12-31"
+                      total_balance: "78.400000"
+                      status: Pending
+                      created_at: "2025-01-29T10:15:57.000000Z"
+                      details:
+                        - id: 209
+                          customer_id: 540
+                          customer:
+                            id: 540
+                            code: C-540
+                            name: Test Customer
+                          opening_balance: "78.400000"
+                          date: "2024-12-31"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 209
+                    last_page: 21
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Customer Openings
+      summary: Create customer opening
+      description: |
+        Creates a customer opening (API version of the web form
+        `admin/opening-setup-customer-opening-create`). Saving uses the same code as the web form:
+
+        - The validation rules of the master fields come from the web form settings
+          (`openingSetup.customerOpening.store`; currently `date` is required). In addition
+          `customer_id` must be a non-empty array of integers and `opening_balance` an array of
+          numbers with the same number of items.
+        - One detail is saved per `customer_id`, with the `opening_balance` at the same index. A
+          negative balance is a credit.
+        - `total_balance` is saved from `sub_total` as sent; it is not calculated.
+        - `voucher_no` is saved as sent; it is not generated.
+        - `status` is always `Pending`.
+        - For each customer an `Opening Balance` sale payment (ledger entry) is added; the
+          customer's previous opening balance payment is replaced.
+
+        Required permission: `module:opening.menu:customer-opening.permission:create`
+      operationId: createCustomerOpening
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerOpeningRequest"
+            example:
+              date: "2026-11-12"
+              voucher_no: COID00000210
+              sub_total: 1300
+              customer_id: [1, 2]
+              opening_balance: [1500, -200]
+
+      responses:
+        "201":
+          description: Customer opening created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CustomerOpening"
+              example:
+                code: 201
+                success: true
+                message: Customer opening created successfully.
+                data:
+                  id: 211
+                  company_id: 1
+                  voucher_no: COID00000210
+                  date: "2026-11-12"
+                  total_balance: "1300.000000"
+                  status: Pending
+                  created_at: "2026-11-12T07:58:32.000000Z"
+                  details:
+                    - id: 210
+                      customer_id: 1
+                      customer:
+                        id: 1
+                        code: C-001
+                        name: Test Customer A
+                      opening_balance: "1500.000000"
+                      date: "2026-11-12"
+                    - id: 211
+                      customer_id: 2
+                      customer:
+                        id: 2
+                        code: C-002
+                        name: Test Customer B
+                      opening_balance: "-200.000000"
+                      date: "2026-11-12"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/CustomerOpeningValidationError"
+
+        "500":
+          $ref: "#/components/responses/OpeningSaveError"
+
+  /customer-openings/{id}:
+    get:
+      tags:
+        - Customer Openings
+      summary: Get customer opening
+      description: |
+        One customer opening with its customers (API version of the web page
+        `admin/opening-setup-customer-opening-show/{id}`). No company filter (same as the web).
+
+        Required permission: `module:opening.menu:customer-opening.permission:view`
+      operationId: getCustomerOpening
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CustomerOpeningId"
+
+      responses:
+        "200":
+          description: Customer opening
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CustomerOpening"
+              example:
+                code: 200
+                success: true
+                message: Detail data
+                data:
+                  id: 211
+                  company_id: 1
+                  voucher_no: COID00000210
+                  date: "2026-11-12"
+                  total_balance: "1300.000000"
+                  status: Pending
+                  created_at: "2026-11-12T07:58:32.000000Z"
+                  details:
+                    - id: 210
+                      customer_id: 1
+                      customer:
+                        id: 1
+                        code: C-001
+                        name: Test Customer A
+                      opening_balance: "1500.000000"
+                      date: "2026-11-12"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/OpeningNotFound"
+
+    put:
+      tags:
+        - Customer Openings
+      summary: Update customer opening
+      description: |
+        Updates a customer opening (API version of the web edit form
+        `admin/opening-setup-customer-opening-edit/{id}`). Send the **whole** opening, as the web
+        form does: the body and validation are the same as create (form settings
+        `openingSetup.customerOpening.update`).
+
+        - The details are **replaced** by the sent customers.
+        - `status` is set to `Pending` again.
+        - An `Opening Balance` sale payment is saved again for each sent customer. The payment of
+          a customer removed from the opening is not removed (same as the web).
+
+        Required permission: `module:opening.menu:customer-opening.permission:edit`
+      operationId: updateCustomerOpening
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CustomerOpeningId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerOpeningRequest"
+            example:
+              date: "2026-11-13"
+              voucher_no: COID00000210
+              sub_total: 500
+              customer_id: [1]
+              opening_balance: [500]
+
+      responses:
+        "200":
+          description: Customer opening updated. `data` is the opening (see `CustomerOpening`) after the update.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CustomerOpening"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/OpeningNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/CustomerOpeningValidationError"
+
+        "500":
+          $ref: "#/components/responses/OpeningSaveError"
+
+    delete:
+      tags:
+        - Customer Openings
+      summary: Delete customer opening
+      description: |
+        Soft-deletes a customer opening and its details (`deleted_at` is set; the rows stay in the
+        database). Uses the same code as the web (`admin/opening-setup-customer-opening-delete/{id}`):
+        the customers' `Opening Balance` sale payments are **not** removed.
+
+        Required permission: `module:opening.menu:customer-opening.permission:delete`
+      operationId: deleteCustomerOpening
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CustomerOpeningId"
+
+      responses:
+        "200":
+          description: Customer opening deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 211
+              example:
+                code: 200
+                success: true
+                message: Customer opening deleted successfully.
+                data:
+                  id: 211
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/OpeningNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "500":
+          $ref: "#/components/responses/OpeningSaveError"
+
+  /supplier-openings:
+    get:
+      tags:
+        - Supplier Openings
+      summary: List supplier openings
+      description: |
+        Paginated list of supplier openings (API version of the web list
+        `admin/opening-setup-supplier-opening-list`). The rows are the same as the web list:
+
+        - **One row per supplier** of an opening; an opening with two suppliers is two rows.
+          `id` is the opening ID (use it for the other supplier opening endpoints) and
+          `opening_balance` is that supplier's balance.
+        - Only openings dated on or after the **opening date** (general setup `opening_date`).
+        - There is **no company filter** (same as the web list).
+        - Soft-deleted details are not listed.
+        - `pagination.total` is the number of **openings**, not rows (same as the web list), so
+          `last_page` can be lower than the real number of pages when openings have more than
+          one supplier.
+
+        Required permission: `module:opening.menu:supplier-opening.permission:view`
+      operationId: listSupplierOpenings
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on opening ID, voucher no, supplier name or opening balance.
+          schema:
+            type: string
+          example: SOID
+        - name: per_page
+          in: query
+          description: Rows per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, voucher_no, date, opening_balance]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Supplier opening rows
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/SupplierOpeningRow"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 1
+                      voucher_no: SOID00000001
+                      date: "2024-12-31"
+                      name: Test Supplier A
+                      opening_balance: "-1625.000000"
+                    - id: 1
+                      voucher_no: SOID00000001
+                      date: "2024-12-31"
+                      name: Test Supplier B
+                      opening_balance: "-6052.700000"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 1
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Supplier Openings
+      summary: Create supplier opening
+      description: |
+        Creates a supplier opening (API version of the web form
+        `admin/opening-setup-supplier-opening-create`). Saving uses the same code as the web form:
+
+        - Validation is only the web form settings (`openingSetup.supplierOpening.store`;
+          currently `date` is required). `supplier_id` and `opening_balance` are **not** checked,
+          as on the web: when they are not sent, an opening **without suppliers** is saved.
+        - One detail is saved per `supplier_id`, with the `opening_balance` at the same index. A
+          negative balance is a credit.
+        - `total_balance` is saved from `sub_total` as sent; it is not calculated.
+        - `voucher_no` is saved as sent; it is not generated.
+        - `status` is always `Approved`.
+        - For each supplier an `Opening Balance` purchase payment (ledger entry) is added; the
+          supplier's previous opening balance payment is replaced.
+
+        Required permission: `module:opening.menu:supplier-opening.permission:create`
+      operationId: createSupplierOpening
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SupplierOpeningRequest"
+            example:
+              date: "2026-11-12"
+              voucher_no: SOID00000002
+              sub_total: 1300
+              supplier_id: [1, 2]
+              opening_balance: [1500, -200]
+
+      responses:
+        "201":
+          description: Supplier opening created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/SupplierOpening"
+              example:
+                code: 201
+                success: true
+                message: Supplier opening created successfully.
+                data:
+                  id: 3
+                  company_id: 1
+                  voucher_no: SOID00000002
+                  date: "2026-11-12"
+                  total_balance: "1300.000000"
+                  status: Approved
+                  created_at: "2026-11-12T09:04:28.000000Z"
+                  details:
+                    - id: 4
+                      supplier_id: 1
+                      supplier:
+                        id: 1
+                        code: null
+                        name: Test Supplier A
+                      opening_balance: "1500.000000"
+                      date: "2026-11-12"
+                    - id: 5
+                      supplier_id: 2
+                      supplier:
+                        id: 2
+                        code: null
+                        name: Test Supplier B
+                      opening_balance: "-200.000000"
+                      date: "2026-11-12"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/OpeningDateValidationError"
+
+        "500":
+          $ref: "#/components/responses/OpeningSaveError"
+
+  /supplier-openings/{id}:
+    get:
+      tags:
+        - Supplier Openings
+      summary: Get supplier opening
+      description: |
+        One supplier opening with its suppliers (API version of the web page
+        `admin/opening-setup-supplier-opening-show/{id}`). No company filter (same as the web).
+
+        Required permission: `module:opening.menu:supplier-opening.permission:view`
+      operationId: getSupplierOpening
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/SupplierOpeningId"
+
+      responses:
+        "200":
+          description: Supplier opening
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/SupplierOpening"
+              example:
+                code: 200
+                success: true
+                message: Detail data
+                data:
+                  id: 3
+                  company_id: 1
+                  voucher_no: SOID00000002
+                  date: "2026-11-12"
+                  total_balance: "1300.000000"
+                  status: Approved
+                  created_at: "2026-11-12T09:04:28.000000Z"
+                  details:
+                    - id: 4
+                      supplier_id: 1
+                      supplier:
+                        id: 1
+                        code: null
+                        name: Test Supplier A
+                      opening_balance: "1500.000000"
+                      date: "2026-11-12"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/OpeningNotFound"
+
+    put:
+      tags:
+        - Supplier Openings
+      summary: Update supplier opening
+      description: |
+        Updates a supplier opening (API version of the web edit form
+        `admin/opening-setup-supplier-opening-edit/{id}`). Send the **whole** opening, as the web
+        form does: the body and validation are the same as create (form settings
+        `openingSetup.supplierOpening.update`).
+
+        - The details are **replaced** by the sent suppliers.
+        - `status` is set to `Approved`.
+        - An `Opening Balance` purchase payment is saved again for each sent supplier. The payment
+          of a supplier removed from the opening is not removed (same as the web).
+
+        Required permission: `module:opening.menu:supplier-opening.permission:edit`
+      operationId: updateSupplierOpening
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/SupplierOpeningId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SupplierOpeningRequest"
+            example:
+              date: "2026-11-13"
+              voucher_no: SOID00000002
+              sub_total: 500
+              supplier_id: [1]
+              opening_balance: [500]
+
+      responses:
+        "200":
+          description: Supplier opening updated. `data` is the opening (see `SupplierOpening`) after the update.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/SupplierOpening"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/OpeningNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/OpeningDateValidationError"
+
+        "500":
+          $ref: "#/components/responses/OpeningSaveError"
+
+    delete:
+      tags:
+        - Supplier Openings
+      summary: Delete supplier opening
+      description: |
+        Soft-deletes a supplier opening and its details (`deleted_at` is set; the rows stay in the
+        database). Uses the same code as the web (`admin/opening-setup-supplier-opening-delete/{id}`):
+        the suppliers' `Opening Balance` purchase payments are **not** removed.
+
+        Required permission: `module:opening.menu:supplier-opening.permission:delete`
+      operationId: deleteSupplierOpening
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/SupplierOpeningId"
+
+      responses:
+        "200":
+          description: Supplier opening deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 3
+              example:
+                code: 200
+                success: true
+                message: Supplier opening deleted successfully.
+                data:
+                  id: 3
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/OpeningNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "500":
+          $ref: "#/components/responses/OpeningSaveError"
+
+  /inventory-openings:
+    get:
+      tags:
+        - Inventory Openings
+      summary: List inventory openings
+      description: |
+        Paginated list of inventory openings (API version of the web list
+        `admin/opening-setup-inventory-list`). The rows are the same as the web list:
+
+        - **One row per product** of an opening. `id` is the opening ID (use it for the other
+          inventory opening endpoints).
+        - `grand_total` is that product's **quantity** (the web list shows the quantity in this
+          column).
+        - `branch` and `store` are names; `batch_no` is the batch name.
+        - Only openings dated on or after the **opening date** (general setup `opening_date`),
+          sorted by opening ID ascending (the web list always uses this order).
+        - There is **no company filter** (same as the web list).
+        - Soft-deleted openings and details are not listed.
+        - `pagination.total` is the number of **openings**, not rows (same as the web list).
+
+        Required permission: `module:opening.menu:inventory-opening.permission:view`
+      operationId: listInventoryOpenings
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on opening ID, voucher no, product name, batch name, branch name or store name.
+          schema:
+            type: string
+          example: IOID
+        - name: per_page
+          in: query
+          description: Rows per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+
+      responses:
+        "200":
+          description: Inventory opening rows
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/InventoryOpeningRow"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 1
+                      voucher_no: IOID00000001
+                      date: "2024-12-31"
+                      name: Test Product A
+                      batch_no: B-0001
+                      branch: Test Branch
+                      store: Test Store
+                      documents: null
+                      grand_total: "3.400000"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 264
+                    last_page: 27
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Inventory Openings
+      summary: Create inventory opening
+      description: |
+        Creates an inventory opening (API version of the web form
+        `admin/opening-setup-inventory-create`). Saving uses the same code as the web form:
+
+        - Validation is only the web form settings (`openingSetup.inventory.store`; currently
+          `date` and `store_id` are required). The product arrays are not checked, as on the web.
+        - `voucher_no` is **generated** (`inventory_opening_prefix` + number); a sent
+          `voucher_no` is not saved.
+        - `branch_id` / `store_id` fall back to the default branch / store when not sent.
+        - One detail is saved per `product_id`, with the values at the same index of the other
+          arrays. `batch_no` is a batch **name**: an unknown name creates a new batch.
+        - `grand_total` is the sum of `total_price`.
+        - A general entry (form 14), a stock row and the stock summary are added for each product.
+
+        Required permission: `module:opening.menu:inventory-opening.permission:create`
+      operationId: createInventoryOpening
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InventoryOpeningRequest"
+            example:
+              date: "2026-11-12"
+              voucher_no: x
+              branch_id: 1
+              store_id: 1
+              product_id: [1, 2]
+              batch_no: [B-0001, B-0002]
+              pack_size: [1, 1]
+              pack_no: [10, 5]
+              quantity: [10, 5]
+              unit_price: [100, 50]
+              total_price: [1000, 250]
+
+      responses:
+        "201":
+          description: Inventory opening created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/InventoryOpening"
+              example:
+                code: 201
+                success: true
+                message: Inventory opening created successfully.
+                data:
+                  id: 267
+                  company_id: 1
+                  voucher_no: IOID00000267
+                  date: "2026-11-12"
+                  branch_id: 1
+                  documents: null
+                  grand_total: "1250.000000"
+                  created_at: "2026-11-12T09:16:21.000000Z"
+                  details:
+                    - id: 271
+                      product_id: 1
+                      product:
+                        id: 1
+                        code: null
+                        name: Test Product A
+                      batch_no: 888
+                      batch:
+                        id: 888
+                        name: B-0001
+                      branch_id: 1
+                      store_id: 1
+                      pack_size: "1.000000"
+                      pack_no: "10.000000"
+                      quantity: "10.000000"
+                      unit_price: "100.000000"
+                      total_price: "1000.000000"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/InventoryOpeningValidationError"
+
+        "500":
+          $ref: "#/components/responses/OpeningSaveError"
+
+  /inventory-openings/{id}:
+    get:
+      tags:
+        - Inventory Openings
+      summary: Get inventory opening
+      description: |
+        One inventory opening with its products (API version of the web page
+        `admin/opening-setup-inventory-show/{id}`). No company filter (same as the web).
+
+        Required permission: `module:opening.menu:inventory-opening.permission:view`
+      operationId: getInventoryOpening
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/InventoryOpeningId"
+
+      responses:
+        "200":
+          description: Inventory opening
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/InventoryOpening"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/OpeningNotFound"
+
+    put:
+      tags:
+        - Inventory Openings
+      summary: Update inventory opening
+      description: |
+        Updates an inventory opening (API version of the web edit form
+        `admin/opening-setup-inventory-edit/{id}`). Send the **whole** opening, as the web form
+        does: the body is the same as create; validation comes from the form settings
+        `openingSetup.inventory.update`.
+
+        - Not allowed (`409`) when the logged-in user's company already has purchases, sales and
+          ledger entries — the web list hides the edit button then.
+        - `voucher_no` is saved **as sent** (on update it is not generated, same as the web).
+        - The opening's old stock rows and general entries are removed and the stock summary
+          quantities reduced; then the details, general entries, stock and stock summary are
+          saved again from the sent products.
+
+        Required permission: `module:opening.menu:inventory-opening.permission:edit`
+      operationId: updateInventoryOpening
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/InventoryOpeningId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InventoryOpeningRequest"
+            example:
+              date: "2026-11-12"
+              voucher_no: IOID00000267
+              branch_id: 1
+              store_id: 1
+              product_id: [1, 2]
+              batch_no: [B-0001, B-0002]
+              pack_size: [1, 1]
+              pack_no: [10, 5]
+              quantity: [20, 5]
+              unit_price: [100, 50]
+              total_price: [2000, 250]
+
+      responses:
+        "200":
+          description: Inventory opening updated. `data` is the opening (see `InventoryOpening`) after the update.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/InventoryOpening"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/OpeningNotFound"
+
+        "409":
+          $ref: "#/components/responses/InventoryOpeningLocked"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/InventoryOpeningValidationError"
+
+        "500":
+          $ref: "#/components/responses/OpeningSaveError"
+
+    delete:
+      tags:
+        - Inventory Openings
+      summary: Delete inventory opening
+      description: |
+        Deletes an inventory opening with the same code as the web
+        (`admin/opening-setup-inventory-delete/{id}`):
+
+        - Not allowed (`409`) when the logged-in user's company already has purchases, sales and
+          ledger entries — the web list hides the delete button then.
+        - The opening and its details are soft-deleted.
+        - As on the web, the stock rows removed are the ones whose `general_id` equals the
+          **opening ID**, and the stock summary rows saved on the opening are removed; the
+          general entries stay.
+
+        Required permission: `module:opening.menu:inventory-opening.permission:delete`
+      operationId: deleteInventoryOpening
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/InventoryOpeningId"
+
+      responses:
+        "200":
+          description: Inventory opening deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 267
+              example:
+                code: 200
+                success: true
+                message: Inventory opening deleted successfully.
+                data:
+                  id: 267
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/OpeningNotFound"
+
+        "409":
+          $ref: "#/components/responses/InventoryOpeningLocked"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "500":
+          $ref: "#/components/responses/OpeningSaveError"
+
+  /opening-balances:
+    get:
+      tags:
+        - Opening Balance
+      summary: Get opening balance
+      description: |
+        The account opening balance rows and the opening totals (API version of the web page
+        `admin/account-setup-opening-balance-edit` and its branch change call
+        `admin/account-setup-opening-balance-detailsInfo`). Only rows of the **logged-in user's
+        company** (same as the web page); soft-deleted rows are not returned.
+
+        - `branch_id` not sent: all rows of the company (as when the web page opens).
+        - `branch_id=All`: all rows of the company.
+        - `branch_id=<id>`: only the rows of that branch.
+        - Any other value: `items` is empty.
+
+        `inventory_balance`, `customer_balance` and `supplier_balance` are the company's totals of
+        inventory, customer and supplier openings (shown next to the form on the web page).
+        Accounts to choose from: `GET /chart-of-accounts`.
+
+        Required permission: `module:opening.menu:opening-balance.permission:view`
+      operationId: getOpeningBalance
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: branch_id
+          in: query
+          description: "`All` or a branch ID. Not sent = all rows."
+          schema:
+            oneOf:
+              - type: string
+                enum: [All]
+              - type: integer
+          example: 1
+
+      responses:
+        "200":
+          description: Opening balance
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/OpeningBalance"
+              example:
+                code: 200
+                success: true
+                message: Detail data
+                data:
+                  inventory_balance: "1817481.539000"
+                  customer_balance: "442228.031500"
+                  supplier_balance: "679068.100000"
+                  items:
+                    - id: 1
+                      branch_id: 1
+                      date: "2024-12-31"
+                      account_id: 5
+                      account:
+                        id: 5
+                        name: Test Account A
+                      debit: "383.470000"
+                      credit: "0.000000"
+                      memo: Opening
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    put:
+      tags:
+        - Opening Balance
+      summary: Update opening balance
+      description: |
+        Saves the opening balance rows of a branch (API version of the web form submit
+        `admin/account-setup-opening-balance-update`), with the same code as the web:
+
+        - All current rows of the branch (`branch_id=All`: of the whole company) are
+          **soft-deleted**, then the sent rows are saved as new rows (new IDs). To remove a row,
+          leave it out; there is no separate delete endpoint (same as the web).
+        - One row per `debit_id` (account ID), with the `debit`, `credit` and `memo` at the same
+          index.
+        - No validation, as on the web: debit and credit totals are not checked. When `debit_id`
+          is empty or not sent, **nothing is changed**.
+        - With `branch_id=All` the value `All` is written to the new rows' integer `branch_id`
+          column (same as the web), so they do not keep a real branch.
+
+        `data` is the result for the sent `branch_id` (see `GET /opening-balances`).
+
+        Required permission: `module:opening.menu:opening-balance.permission:edit`
+      operationId: updateOpeningBalance
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpeningBalanceRequest"
+            example:
+              date: "2024-12-31"
+              branch_id: 1
+              debit_id: [4, 5]
+              debit: [5000, 0]
+              credit: [0, 5000]
+              memo: [Opening, Opening]
+
+      responses:
+        "200":
+          description: Opening balance saved
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/OpeningBalance"
+              example:
+                code: 200
+                success: true
+                message: Opening balance updated successfully.
+                data:
+                  inventory_balance: "1817481.539000"
+                  customer_balance: "442228.031500"
+                  supplier_balance: "679068.100000"
+                  items:
+                    - id: 285
+                      branch_id: 1
+                      date: "2024-12-31"
+                      account_id: 4
+                      account:
+                        id: 4
+                        name: Test Account B
+                      debit: "5000.000000"
+                      credit: "0.000000"
+                      memo: Opening
+                    - id: 286
+                      branch_id: 1
+                      date: "2024-12-31"
+                      account_id: 5
+                      account:
+                        id: 5
+                        name: Test Account A
+                      debit: "0.000000"
+                      credit: "5000.000000"
+                      memo: Opening
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
 components:
   securitySchemes:
     sessionCookie:
@@ -13766,6 +15142,39 @@ components:
       schema:
         type: integer
       example: 1
+
+    CustomerOpeningId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Customer opening ID. An unknown, soft-deleted or non-numeric ID returns `404`. There is no
+        company filter (same as the web).
+      schema:
+        type: integer
+      example: 211
+
+    SupplierOpeningId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Supplier opening ID (the `id` of a list row). An unknown, soft-deleted or non-numeric ID
+        returns `404`. There is no company filter (same as the web).
+      schema:
+        type: integer
+      example: 3
+
+    InventoryOpeningId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Inventory opening ID (the `id` of a list row). An unknown, soft-deleted or non-numeric ID
+        returns `404`. There is no company filter (same as the web).
+      schema:
+        type: integer
+      example: 267
 
   schemas:
     SuccessEnvelope:
@@ -15772,6 +17181,488 @@ components:
         name:
           type: string
           example: Test Product A
+
+    CustomerOpening:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 211
+        company_id:
+          type: integer
+          example: 1
+        voucher_no:
+          type: [string, "null"]
+          example: COID00000210
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2026-11-12"
+        total_balance:
+          type: [string, "null"]
+          description: Saved from `sub_total` as sent.
+          example: "1300.000000"
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel, Partial Received]
+          example: Pending
+        created_at:
+          type: [string, "null"]
+          format: date-time
+        details:
+          type: array
+          description: The opening's customers (soft-deleted details are left out).
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+                example: 210
+              customer_id:
+                type: integer
+                example: 1
+              customer:
+                type: [object, "null"]
+                description: "`null` when the customer is deleted."
+                properties:
+                  id:
+                    type: integer
+                    example: 1
+                  code:
+                    type: [string, "null"]
+                    example: C-001
+                  name:
+                    type: string
+                    example: Test Customer A
+              opening_balance:
+                type: string
+                description: Negative is a credit.
+                example: "1500.000000"
+              date:
+                type: [string, "null"]
+                format: date
+                example: "2026-11-12"
+
+    CustomerOpeningRequest:
+      type: object
+      description: Same fields as the web form. The arrays are matched by index.
+      required:
+        - date
+        - customer_id
+        - opening_balance
+      properties:
+        date:
+          type: string
+          format: date
+          example: "2026-11-12"
+        voucher_no:
+          type: [string, "null"]
+          description: Saved as sent (not generated).
+          example: COID00000210
+        sub_total:
+          type: [number, "null"]
+          description: Saved as `total_balance` as sent (not calculated).
+          example: 1300
+        customer_id:
+          type: array
+          minItems: 1
+          items:
+            type: integer
+          example: [1, 2]
+        opening_balance:
+          type: array
+          description: One number per `customer_id`, same order. Negative is a credit.
+          items:
+            type: number
+          example: [1500, -200]
+
+    SupplierOpeningRow:
+      type: object
+      description: One list row — one supplier of an opening (same columns as the web list).
+      properties:
+        id:
+          type: integer
+          description: Opening ID.
+          example: 1
+        voucher_no:
+          type: [string, "null"]
+          example: SOID00000001
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2024-12-31"
+        name:
+          type: [string, "null"]
+          description: Supplier name.
+          example: Test Supplier A
+        opening_balance:
+          type: [string, "null"]
+          description: This supplier's opening balance.
+          example: "-1625.000000"
+
+    SupplierOpening:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 3
+        company_id:
+          type: integer
+          example: 1
+        voucher_no:
+          type: [string, "null"]
+          example: SOID00000002
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2026-11-12"
+        total_balance:
+          type: [string, "null"]
+          description: Saved from `sub_total` as sent.
+          example: "1300.000000"
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel, Partial Received]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+        details:
+          type: array
+          description: The opening's suppliers (soft-deleted details are left out).
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+                example: 4
+              supplier_id:
+                type: integer
+                example: 1
+              supplier:
+                type: [object, "null"]
+                description: "`null` when the supplier is deleted."
+                properties:
+                  id:
+                    type: integer
+                    example: 1
+                  code:
+                    type: [string, "null"]
+                    example: null
+                  name:
+                    type: string
+                    example: Test Supplier A
+              opening_balance:
+                type: string
+                description: Negative is a credit.
+                example: "1500.000000"
+              date:
+                type: [string, "null"]
+                format: date
+                example: "2026-11-12"
+
+    SupplierOpeningRequest:
+      type: object
+      description: |
+        Same fields as the web form. The arrays are matched by index. Only `date` is validated
+        (web form settings); the supplier arrays are not checked, as on the web.
+      required:
+        - date
+      properties:
+        date:
+          type: string
+          format: date
+          example: "2026-11-12"
+        voucher_no:
+          type: [string, "null"]
+          description: Saved as sent (not generated).
+          example: SOID00000002
+        sub_total:
+          type: [number, "null"]
+          description: Saved as `total_balance` as sent (not calculated).
+          example: 1300
+        supplier_id:
+          type: array
+          items:
+            type: integer
+          example: [1, 2]
+        opening_balance:
+          type: array
+          description: One number per `supplier_id`, same order. Negative is a credit.
+          items:
+            type: number
+          example: [1500, -200]
+
+    InventoryOpeningRow:
+      type: object
+      description: One list row — one product of an opening (same columns as the web list).
+      properties:
+        id:
+          type: integer
+          description: Opening ID.
+          example: 1
+        voucher_no:
+          type: [string, "null"]
+          example: IOID00000001
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2024-12-31"
+        name:
+          type: [string, "null"]
+          description: Product name.
+          example: Test Product A
+        batch_no:
+          type: [string, "null"]
+          description: Batch name.
+          example: B-0001
+        branch:
+          type: [string, "null"]
+          description: Branch name.
+          example: Test Branch
+        store:
+          type: [string, "null"]
+          description: Store name.
+          example: Test Store
+        documents:
+          type: [string, "null"]
+          example: null
+        grand_total:
+          type: [string, "null"]
+          description: This product's **quantity** (the web list shows the quantity in this column).
+          example: "3.400000"
+
+    InventoryOpening:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 267
+        company_id:
+          type: integer
+          example: 1
+        voucher_no:
+          type: [string, "null"]
+          example: IOID00000267
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2026-11-12"
+        branch_id:
+          type: [integer, "null"]
+          example: 1
+        documents:
+          type: [string, "null"]
+          example: null
+        grand_total:
+          type: [string, "null"]
+          description: Sum of the products' `total_price`.
+          example: "1250.000000"
+        created_at:
+          type: [string, "null"]
+          format: date-time
+        details:
+          type: array
+          description: The opening's products (soft-deleted details are left out).
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+                example: 271
+              product_id:
+                type: integer
+                example: 1
+              product:
+                type: [object, "null"]
+                description: "`null` when the product is deleted."
+                properties:
+                  id:
+                    type: integer
+                    example: 1
+                  code:
+                    type: [string, "null"]
+                    example: null
+                  name:
+                    type: string
+                    example: Test Product A
+              batch_no:
+                type: [integer, "null"]
+                description: Batch ID.
+                example: 888
+              batch:
+                $ref: "#/components/schemas/NamedRef"
+              branch_id:
+                type: [integer, "null"]
+                example: 1
+              store_id:
+                type: [integer, "null"]
+                example: 1
+              pack_size:
+                type: [string, "null"]
+                example: "1.000000"
+              pack_no:
+                type: [string, "null"]
+                example: "10.000000"
+              quantity:
+                type: [string, "null"]
+                example: "10.000000"
+              unit_price:
+                type: [string, "null"]
+                example: "100.000000"
+              total_price:
+                type: [string, "null"]
+                example: "1000.000000"
+
+    InventoryOpeningRequest:
+      type: object
+      description: |
+        Same fields as the web form. The product arrays are matched by index (one value per
+        `product_id`). Only the web form settings are validated (currently `date` and
+        `store_id`); the product arrays are not checked, as on the web.
+      required:
+        - date
+        - store_id
+      properties:
+        date:
+          type: string
+          format: date
+          example: "2026-11-12"
+        voucher_no:
+          type: [string, "null"]
+          description: Create — ignored (generated). Update — saved as sent.
+          example: IOID00000267
+        branch_id:
+          type: [integer, "null"]
+          description: Default branch when not sent.
+          example: 1
+        store_id:
+          type: [integer, "null"]
+          description: Default store when not sent (the form settings currently require it).
+          example: 1
+        documents:
+          type: [string, "null"]
+          description: Saved as sent.
+          example: null
+        product_id:
+          type: array
+          items:
+            type: integer
+          example: [1, 2]
+        batch_no:
+          type: array
+          description: Batch names. An unknown name creates a new batch.
+          items:
+            type: string
+          example: [B-0001, B-0002]
+        pack_size:
+          type: array
+          items:
+            type: number
+          example: [1, 1]
+        pack_no:
+          type: array
+          items:
+            type: number
+          example: [10, 5]
+        quantity:
+          type: array
+          items:
+            type: number
+          example: [10, 5]
+        unit_price:
+          type: array
+          items:
+            type: number
+          example: [100, 50]
+        total_price:
+          type: array
+          description: The opening's `grand_total` is the sum of these.
+          items:
+            type: number
+          example: [1000, 250]
+
+    OpeningBalance:
+      type: object
+      properties:
+        inventory_balance:
+          type: [string, number, "null"]
+          description: Company's total of inventory openings (`grand_total`).
+          example: "1817481.539000"
+        customer_balance:
+          type: [string, number, "null"]
+          description: Company's total of customer openings (`total_balance`).
+          example: "442228.031500"
+        supplier_balance:
+          type: [string, number, "null"]
+          description: Company's total of supplier openings (`total_balance`).
+          example: "679068.100000"
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+                example: 1
+              branch_id:
+                type: [integer, "null"]
+                example: 1
+              date:
+                type: [string, "null"]
+                format: date
+                example: "2024-12-31"
+              account_id:
+                type: integer
+                example: 5
+              account:
+                $ref: "#/components/schemas/NamedRef"
+              debit:
+                type: [string, "null"]
+                example: "383.470000"
+              credit:
+                type: [string, "null"]
+                example: "0.000000"
+              memo:
+                type: [string, "null"]
+                example: Opening
+
+    OpeningBalanceRequest:
+      type: object
+      description: Same fields as the web form. The arrays are matched by index. Nothing is validated, as on the web.
+      properties:
+        date:
+          type: string
+          format: date
+          example: "2024-12-31"
+        branch_id:
+          description: "`All` (every row of the company) or a branch ID."
+          oneOf:
+            - type: string
+              enum: [All]
+            - type: integer
+          example: 1
+        debit_id:
+          type: array
+          description: Account IDs. Empty or not sent = nothing is changed.
+          items:
+            type: integer
+          example: [4, 5]
+        debit:
+          type: array
+          items:
+            type: number
+          example: [5000, 0]
+        credit:
+          type: array
+          items:
+            type: number
+          example: [0, 5000]
+        memo:
+          type: array
+          items:
+            type: [string, "null"]
+          example: [Opening, Opening]
 
     Dashboard:
       type: object
@@ -17854,6 +19745,114 @@ components:
                 errors:
                   status:
                     - The selected status is invalid.
+
+    OpeningNotFound:
+      description: No opening with this ID, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    OpeningSaveError:
+      description: Saving failed in the existing web code; nothing is saved. `errors` is the error message.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 500
+            success: false
+            message: Customer opening could not be saved.
+            errors: "Undefined array key 1"
+
+    CustomerOpeningValidationError:
+      description: Request validation failed; nothing is saved.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            empty:
+              summary: Nothing sent
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The date field is required. The customer id field is required. The opening balance field is required. "
+                errors:
+                  date:
+                    - The date field is required.
+                  customer_id:
+                    - The customer id field is required.
+                  opening_balance:
+                    - The opening balance field is required.
+            balanceCount:
+              summary: Not one opening balance per customer
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The opening balance must contain 2 items. "
+                errors:
+                  opening_balance:
+                    - The opening balance must contain 2 items.
+
+    OpeningDateValidationError:
+      description: Request validation failed (web form settings); nothing is saved.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          example:
+            code: 422
+            success: false
+            message: "Validation Failed. The date field is required. "
+            errors:
+              date:
+                - The date field is required.
+
+    InventoryOpeningValidationError:
+      description: Request validation failed (web form settings); nothing is saved.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          example:
+            code: 422
+            success: false
+            message: "Validation Failed. The date field is required. The store id field is required. "
+            errors:
+              date:
+                - The date field is required.
+              store_id:
+                - The store id field is required.
+
+    InventoryOpeningLocked:
+      description: |
+        The logged-in user's company already has purchases, sales and ledger entries, so inventory
+        openings cannot be changed (the web list hides the edit and delete buttons then).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            update:
+              summary: Update
+              value:
+                code: 409
+                success: false
+                message: Inventory opening cannot be updated because purchases, sales and ledger entries already exist.
+                errors: null
+            delete:
+              summary: Delete
+              value:
+                code: 409
+                success: false
+                message: Inventory opening cannot be deleted because purchases, sales and ledger entries already exist.
+                errors: null
 
     ValidationError:
       description: Request validation failed.
