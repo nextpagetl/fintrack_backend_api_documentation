@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.25.0
+  version: 1.26.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -45,7 +45,7 @@ info:
 
     ## Permissions
     Role, branch, store, division, district, upazila, union, employee, department, customer group, customer media, customer, supplier group, supplier, unit,
-    brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason, inventory adjustment reason, cost center, non-inventory, account group, chart of account, product, customer opening, supplier opening, inventory opening and opening balance endpoints also need a Spatie permission, named
+    brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason, inventory adjustment reason, cost center, non-inventory, account group, chart of account, product, customer opening, supplier opening, inventory opening, opening balance, company, fiscal year, currency and vehicle endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -138,6 +138,14 @@ tags:
     description: Opening inventory (Opening → Inventory Opening)
   - name: Opening Balance
     description: Account opening balances (Opening → Opening Balance)
+  - name: Companies
+    description: Company setup and company images (System Configuration → Company Setup)
+  - name: Fiscal Years
+    description: Fiscal year management (System Configuration → Fiscal Year)
+  - name: Currencies
+    description: Currency management (System Configuration → Currency)
+  - name: Vehicles
+    description: Vehicle management (System Configuration → Vehicle)
 
 paths:
   /csrf-token:
@@ -14805,6 +14813,1610 @@ paths:
         "419":
           $ref: "#/components/responses/CsrfMismatch"
 
+  /companies:
+    get:
+      tags:
+        - Companies
+      summary: List companies
+      description: |
+        Paginated list of companies (API version of the web list `admin/settings-company-list`).
+        The super admin sees every company; other users see the companies whose `company_id` is
+        their own company (same filter as the web list). Soft-deleted companies are not listed.
+        The companies are in `data.items` and the pagination info in `data.pagination`.
+
+        Required permission: `module:system-configuration.menu:company-setup.permission:view`
+      operationId: listCompanies
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name, email, phone or status.
+          schema:
+            type: string
+          example: FinTrack
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, email, phone, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Company list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Company"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 1
+                      company_id: 1
+                      name: FinTrack Test Company
+                      email: info@example.com
+                      phone: "01700000001"
+                      website: https://example.com
+                      address: Test Road 1, Dhaka
+                      tax_identification_number: "123456789"
+                      logo: public/uploads/logo/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+                      logo_url: https://backend-fintrack360.eduguard360.com/storage/uploads/logo/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+                      favicon: public/uploads/favicon/0bc17898-cd56-4970-8887-7628f75dbef0.png
+                      favicon_url: https://backend-fintrack360.eduguard360.com/storage/uploads/favicon/0bc17898-cd56-4970-8887-7628f75dbef0.png
+                      invoice_logo: public/uploads/invoice/cc20fc5d-e8b0-4d9f-ac01-65c570dac062.png
+                      invoice_logo_url: https://backend-fintrack360.eduguard360.com/storage/uploads/invoice/cc20fc5d-e8b0-4d9f-ac01-65c570dac062.png
+                      status: Approved
+                      created_at: "2026-11-14T10:00:00.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 1
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /companies/images:
+    post:
+      tags:
+        - Companies
+      summary: Upload company image
+      description: |
+        Step 1 of 2 for company images (logo, favicon, invoice logo): call this as soon as a file
+        is chosen. The image is scaled like the web upload, keeping its aspect ratio
+        (`logo` and `invoice_logo` fit in **140×50**, `favicon` in **45×45**), and kept in the
+        logged-in user's **temporary** folder (`public/uploads/company/tmp/{user_id}/{type}/`).
+        Nothing is saved in the database.
+
+        Step 2: send the returned `data.path` in the field of the same `type` (`logo`, `favicon`
+        or `invoice_logo`) to `PUT /companies/{id}` when the user saves. Show `data.url` as the
+        preview.
+
+        A temporary image that is not saved with a company is deleted by the daily cleanup
+        (02:00 Asia/Dhaka) once it is older than 24 hours; sending its path after that returns `422`
+        and the file must be uploaded again. The URL works only when the server has
+        `php artisan storage:link`.
+
+        Required permission: `module:system-configuration.menu:company-setup.permission:edit`
+      operationId: uploadCompanyImage
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - image
+                - type
+              properties:
+                image:
+                  type: string
+                  format: binary
+                  description: A `jpg`, `jpeg`, `png`, `webp` or `gif` image, at most 5 MB.
+                type:
+                  type: string
+                  enum: [logo, favicon, invoice_logo]
+                  description: Which company image this file is for; the path works only in that field.
+                  example: logo
+
+      responses:
+        "201":
+          description: Image uploaded to the temporary folder
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          type:
+                            type: string
+                            enum: [logo, favicon, invoice_logo]
+                          path:
+                            type: string
+                            description: Send this in the field named by `type` when updating the company.
+                          url:
+                            type: string
+                            description: Public URL of the uploaded image, for the preview.
+              example:
+                code: 201
+                success: true
+                message: Image uploaded successfully.
+                data:
+                  type: logo
+                  path: public/uploads/company/tmp/2/logo/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+                  url: https://backend-fintrack360.eduguard360.com/storage/uploads/company/tmp/2/logo/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: No file, not an image, wrong type, larger than 5 MB, or `type` missing / invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              examples:
+                missing:
+                  summary: No file sent
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The image field is required. "
+                    errors:
+                      image:
+                        - The image field is required.
+                wrongType:
+                  summary: Not a jpg / jpeg / png / webp / gif image
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The image must be an image. "
+                    errors:
+                      image:
+                        - The image must be an image.
+                        - "The image must be a file of type: jpg, jpeg, png, webp, gif."
+                invalidImageType:
+                  summary: type missing or not logo / favicon / invoice_logo
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The selected type is invalid. "
+                    errors:
+                      type:
+                        - The selected type is invalid.
+
+  /companies/{id}:
+    put:
+      tags:
+        - Companies
+      summary: Update company
+      description: |
+        Updates a company (API version of the web edit form `admin/settings-company-edit/{id}`).
+        Send the full company data as **JSON**: every field below is saved from the body. The
+        validation rules are the same as the web form (company form settings), plus unique email
+        and phone checks and a required status.
+
+        - `email` and `phone` must not be used by another company; the company's own values may be kept.
+        - `status` is taken from the body (`Approved`, `Inactive`, `Pending` or `Cancel`).
+        - `company_id` is set to the logged-in user's company (same as the web).
+
+        **Images** (`logo`, `favicon`, `invoice_logo`, all optional):
+
+        | Sent value | Result |
+        |---|---|
+        | Field not sent, or the company's current path | Image kept |
+        | A path from `POST /companies/images` with the same `type`, uploaded by the logged-in user within 24 hours | Image replaced; the file is moved to the web image folder (`public/uploads/logo/`, `favicon/` or `invoice/`), and the old file and the temporary file are deleted |
+        | Anything else (another user's path, another type's path, an expired path, a file) | `422` |
+
+        Images cannot be removed (there is no `null` option).
+
+        Required permission: `module:system-configuration.menu:company-setup.permission:edit`
+      operationId: updateCompany
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CompanyId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompanyUpdateRequest"
+
+      responses:
+        "200":
+          description: Company updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Company"
+              example:
+                code: 200
+                success: true
+                message: Company updated successfully.
+                data:
+                  id: 1
+                  company_id: 1
+                  name: FinTrack Test Company
+                  email: info@example.com
+                  phone: "01700000001"
+                  website: https://example.com
+                  address: Test Road 1, Dhaka
+                  tax_identification_number: "123456789"
+                  logo: public/uploads/logo/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+                  logo_url: https://backend-fintrack360.eduguard360.com/storage/uploads/logo/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+                  favicon: public/uploads/favicon/0bc17898-cd56-4970-8887-7628f75dbef0.png
+                  favicon_url: https://backend-fintrack360.eduguard360.com/storage/uploads/favicon/0bc17898-cd56-4970-8887-7628f75dbef0.png
+                  invoice_logo: public/uploads/invoice/cc20fc5d-e8b0-4d9f-ac01-65c570dac062.png
+                  invoice_logo_url: https://backend-fintrack360.eduguard360.com/storage/uploads/invoice/cc20fc5d-e8b0-4d9f-ac01-65c570dac062.png
+                  status: Approved
+                  created_at: "2026-11-14T10:00:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/CompanyNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/CompanyValidationError"
+
+        "500":
+          description: Saving failed (database or file error); nothing is changed and new files are removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 500
+                success: false
+                message: Company could not be saved.
+                errors: Server Error
+
+  /companies/{id}/status:
+    patch:
+      tags:
+        - Companies
+      summary: Change company status
+      description: |
+        Sets the company's status to `Approved` or `Inactive`.
+
+        Required permission: `module:system-configuration.menu:company-setup.permission:change-status`
+      operationId: updateCompanyStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CompanyId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Company"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 1
+                  company_id: 1
+                  name: FinTrack Test Company
+                  email: info@example.com
+                  phone: "01700000001"
+                  website: https://example.com
+                  address: Test Road 1, Dhaka
+                  tax_identification_number: "123456789"
+                  logo: null
+                  logo_url: null
+                  favicon: null
+                  favicon_url: null
+                  invoice_logo: null
+                  invoice_logo_url: null
+                  status: Inactive
+                  created_at: "2026-11-14T10:00:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/CompanyNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/StatusValidationError"
+
+  /fiscal-years:
+    get:
+      tags:
+        - Fiscal Years
+      summary: List fiscal years
+      description: |
+        Paginated list of the logged-in user's company fiscal years (the same company filter as the
+        web list `admin/settings-fiscal_year-list`). Soft-deleted fiscal years are not listed.
+        The fiscal years are in `data.items` and the pagination info in `data.pagination`.
+
+        Required permission: `module:system-configuration.menu:fiscal-year.permission:view`
+      operationId: listFiscalYears
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, date, fiscal year or status.
+          schema:
+            type: string
+          example: "2026"
+        - name: branch_id
+          in: query
+          description: Only fiscal years of this branch.
+          schema:
+            type: integer
+          example: 1
+        - name: status
+          in: query
+          description: Only fiscal years with this status.
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, date, fiscal_year, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Fiscal year list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/FiscalYear"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 2
+                      company_id: 1
+                      date: "2026-07-01"
+                      fiscal_year: "2027-06-30"
+                      branch_id: 1
+                      branch:
+                        id: 1
+                        name: Head Office
+                      status: Approved
+                      created_at: "2026-11-14T10:20:00.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 1
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Fiscal Years
+      summary: Create fiscal year
+      description: |
+        Creates a fiscal year for the logged-in user's company. The validation rules are the same
+        as the web form (`admin/settings-fiscal_year-create`), read from the fiscal year form
+        settings, plus date formats and a branch check.
+
+        - `status` is always saved as `Approved`, even if another value is sent.
+        - `branch_id` must be a branch of the logged-in user's company that is not soft-deleted.
+
+        Required permission: `module:system-configuration.menu:fiscal-year.permission:create`
+      operationId: createFiscalYear
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FiscalYearRequest"
+
+      responses:
+        "201":
+          description: Fiscal year created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/FiscalYear"
+              example:
+                code: 201
+                success: true
+                message: Fiscal year created successfully.
+                data:
+                  id: 3
+                  company_id: 1
+                  date: "2026-07-01"
+                  fiscal_year: "2027-06-30"
+                  branch_id: 1
+                  branch:
+                    id: 1
+                    name: Head Office
+                  status: Approved
+                  created_at: "2026-11-14T10:30:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/FiscalYearValidationError"
+
+  /fiscal-years/{id}:
+    put:
+      tags:
+        - Fiscal Years
+      summary: Update fiscal year
+      description: |
+        Updates a fiscal year (API version of the web edit form `admin/settings-fiscal_year-edit/{id}`).
+        Send the full fiscal year data: every field is saved from the body. The validation rules
+        are the same as the create endpoint, plus a required status.
+
+        - `status` is taken from the body (`Approved`, `Inactive`, `Pending` or `Cancel`).
+        - `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:system-configuration.menu:fiscal-year.permission:edit`
+      operationId: updateFiscalYear
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/FiscalYearId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/FiscalYearRequest"
+                - type: object
+                  required:
+                    - status
+                  properties:
+                    status:
+                      type: string
+                      enum: [Approved, Inactive, Pending, Cancel]
+                      example: Inactive
+
+      responses:
+        "200":
+          description: Fiscal year updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/FiscalYear"
+              example:
+                code: 200
+                success: true
+                message: Fiscal year updated successfully.
+                data:
+                  id: 2
+                  company_id: 1
+                  date: "2026-07-01"
+                  fiscal_year: "2027-06-30"
+                  branch_id: 1
+                  branch:
+                    id: 1
+                    name: Head Office
+                  status: Inactive
+                  created_at: "2026-11-14T10:20:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/FiscalYearNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/FiscalYearValidationError"
+
+    delete:
+      tags:
+        - Fiscal Years
+      summary: Delete fiscal year
+      description: |
+        Soft-deletes a fiscal year (`deleted_at` is set; the row stays in the database). A deleted
+        fiscal year is no longer listed and returns `404` on every other endpoint. Fiscal years are
+        not used by other records, so there is no in-use check.
+
+        Required permission: `module:system-configuration.menu:fiscal-year.permission:delete`
+      operationId: deleteFiscalYear
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/FiscalYearId"
+
+      responses:
+        "200":
+          description: Fiscal year deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 3
+              example:
+                code: 200
+                success: true
+                message: Fiscal year deleted successfully.
+                data:
+                  id: 3
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/FiscalYearNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /fiscal-years/{id}/status:
+    patch:
+      tags:
+        - Fiscal Years
+      summary: Change fiscal year status
+      description: |
+        Sets the fiscal year's status to `Approved` or `Inactive`.
+
+        Required permission: `module:system-configuration.menu:fiscal-year.permission:change-status`
+      operationId: updateFiscalYearStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/FiscalYearId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/FiscalYear"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 2
+                  company_id: 1
+                  date: "2026-07-01"
+                  fiscal_year: "2027-06-30"
+                  branch_id: 1
+                  branch:
+                    id: 1
+                    name: Head Office
+                  status: Inactive
+                  created_at: "2026-11-14T10:20:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/FiscalYearNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/StatusValidationError"
+
+  /currencies:
+    get:
+      tags:
+        - Currencies
+      summary: List currencies
+      description: |
+        Paginated list of the logged-in user's company currencies (the same company filter as the
+        web list `admin/settings-currency-list`). Soft-deleted currencies are not listed.
+        The currencies are in `data.items` and the pagination info in `data.pagination`.
+
+        Required permission: `module:system-configuration.menu:currency.permission:view`
+      operationId: listCurrencies
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name, currency symbol or status.
+          schema:
+            type: string
+          example: Taka
+        - name: status
+          in: query
+          description: Only currencies with this status.
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, currency_symbol, exchange_rate, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Currency list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Currency"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 2
+                      company_id: 1
+                      name: US Dollar
+                      currency_symbol: $
+                      exchange_rate: 122.5
+                      status: Approved
+                      created_at: "2026-11-14T10:20:00.000000Z"
+                    - id: 1
+                      company_id: 1
+                      name: Bangladeshi Taka
+                      currency_symbol: ৳
+                      exchange_rate: 1
+                      status: Approved
+                      created_at: "2026-11-14T10:15:00.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 2
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Currencies
+      summary: Create currency
+      description: |
+        Creates a currency for the logged-in user's company. The validation rules are the same
+        as the web form (`admin/settings-currency-create`), read from the currency form settings,
+        plus a unique name check and a positive exchange rate.
+
+        - `status` is always saved as `Approved`, even if another value is sent.
+        - `name` must be unique within the logged-in user's company (not case-sensitive).
+          Soft-deleted currencies are not counted.
+        - `exchange_rate` is stored with 2 decimals.
+
+        Required permission: `module:system-configuration.menu:currency.permission:create`
+      operationId: createCurrency
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CurrencyRequest"
+
+      responses:
+        "201":
+          description: Currency created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Currency"
+              example:
+                code: 201
+                success: true
+                message: Currency created successfully.
+                data:
+                  id: 3
+                  company_id: 1
+                  name: Euro
+                  currency_symbol: €
+                  exchange_rate: 133.25
+                  status: Approved
+                  created_at: "2026-11-14T10:30:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/CurrencyValidationError"
+
+  /currencies/{id}:
+    put:
+      tags:
+        - Currencies
+      summary: Update currency
+      description: |
+        Updates a currency (API version of the web edit form `admin/settings-currency-edit/{id}`).
+        Send the full currency data: every field is saved from the body. The validation rules are
+        the same as the create endpoint, plus a required status.
+
+        - `name` must be unique within the logged-in user's company; the currency's own name may be kept.
+        - `status` is taken from the body (`Approved`, `Inactive`, `Pending` or `Cancel`).
+        - `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:system-configuration.menu:currency.permission:edit`
+      operationId: updateCurrency
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CurrencyId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/CurrencyRequest"
+                - type: object
+                  required:
+                    - status
+                  properties:
+                    status:
+                      type: string
+                      enum: [Approved, Inactive, Pending, Cancel]
+                      example: Approved
+
+      responses:
+        "200":
+          description: Currency updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Currency"
+              example:
+                code: 200
+                success: true
+                message: Currency updated successfully.
+                data:
+                  id: 2
+                  company_id: 1
+                  name: US Dollar
+                  currency_symbol: $
+                  exchange_rate: 121.75
+                  status: Approved
+                  created_at: "2026-11-14T10:20:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/CurrencyNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/CurrencyValidationError"
+
+    delete:
+      tags:
+        - Currencies
+      summary: Delete currency
+      description: |
+        Soft-deletes a currency (`deleted_at` is set; the row stays in the database). A deleted
+        currency is no longer listed, returns `404` on every other endpoint, and its name can be
+        used again.
+
+        The currency cannot be deleted (`409`) when a general setup uses it
+        (`general_setups.currencie_id`; soft-deleted general setups are not counted).
+
+        Required permission: `module:system-configuration.menu:currency.permission:delete`
+      operationId: deleteCurrency
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CurrencyId"
+
+      responses:
+        "200":
+          description: Currency deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 3
+              example:
+                code: 200
+                success: true
+                message: Currency deleted successfully.
+                data:
+                  id: 3
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/CurrencyNotFound"
+
+        "409":
+          description: The currency is used by a general setup.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Currency is in use and cannot be deleted.
+                errors:
+                  used_in: [general_setups]
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /currencies/{id}/status:
+    patch:
+      tags:
+        - Currencies
+      summary: Change currency status
+      description: |
+        Sets the currency's status to `Approved` or `Inactive`.
+
+        Required permission: `module:system-configuration.menu:currency.permission:change-status`
+      operationId: updateCurrencyStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/CurrencyId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Currency"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 2
+                  company_id: 1
+                  name: US Dollar
+                  currency_symbol: $
+                  exchange_rate: 122.5
+                  status: Inactive
+                  created_at: "2026-11-14T10:20:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/CurrencyNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/StatusValidationError"
+
+  /vehicles:
+    get:
+      tags:
+        - Vehicles
+      summary: List vehicles
+      description: |
+        Paginated list of the logged-in user's company vehicles (the same company filter as the
+        web list `admin/vehicle-list`). Soft-deleted vehicles are not listed.
+        The vehicles are in `data.items` and the pagination info in `data.pagination`.
+
+        Required permission: `module:system-configuration.menu:vehicle.permission:view`
+      operationId: listVehicles
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, brand, year, registration number, chassis number or status.
+          schema:
+            type: string
+          example: Toyota
+        - name: branch_id
+          in: query
+          description: Only vehicles of this branch.
+          schema:
+            type: integer
+          example: 1
+        - name: status
+          in: query
+          description: Only vehicles with this status.
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, brand, year, registration_no, chassis_no, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: Vehicle list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Vehicle"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 1
+                      company_id: 1
+                      branch_id: 1
+                      branch:
+                        id: 1
+                        name: Head Office
+                      brand: Toyota Hiace
+                      year: "2022"
+                      registration_no: DHAKA-METRO-CHA-11-2233
+                      chassis_no: KDH2010012345
+                      status: Approved
+                      created_at: "2026-11-14T10:20:00.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 1
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Vehicles
+      summary: Create vehicle
+      description: |
+        Creates a vehicle for the logged-in user's company. The validation rules are the same as the
+        web form (`admin/vehicle-create`), read from the vehicle form settings, plus a branch check,
+        a 4-digit year and a unique chassis number.
+
+        - `status` is always saved as `Approved`, even if another value is sent.
+        - `branch_id` must be a branch of the logged-in user's company that is not soft-deleted.
+        - `chassis_no` must not be used by another vehicle (soft-deleted vehicles are not counted).
+
+        Required permission: `module:system-configuration.menu:vehicle.permission:create`
+      operationId: createVehicle
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VehicleRequest"
+
+      responses:
+        "201":
+          description: Vehicle created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Vehicle"
+              example:
+                code: 201
+                success: true
+                message: Vehicle created successfully.
+                data:
+                  id: 2
+                  company_id: 1
+                  branch_id: 1
+                  branch:
+                    id: 1
+                    name: Head Office
+                  brand: Toyota Hiace
+                  year: "2022"
+                  registration_no: DHAKA-METRO-CHA-11-2233
+                  chassis_no: KDH2010012345
+                  status: Approved
+                  created_at: "2026-11-14T10:30:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/VehicleValidationError"
+
+  /vehicles/{id}:
+    put:
+      tags:
+        - Vehicles
+      summary: Update vehicle
+      description: |
+        Updates a vehicle (API version of the web edit form `admin/vehicle-edit/{id}`).
+        Send the full vehicle data: every field is saved from the body. The validation rules are
+        the same as the create endpoint, plus a required status.
+
+        - `chassis_no` must not be used by another vehicle; the vehicle's own value may be kept.
+        - `status` is taken from the body (`Approved`, `Inactive`, `Pending` or `Cancel`).
+        - `company_id` is set to the logged-in user's company.
+
+        Required permission: `module:system-configuration.menu:vehicle.permission:edit`
+      operationId: updateVehicle
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/VehicleId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/VehicleRequest"
+                - type: object
+                  required:
+                    - status
+                  properties:
+                    status:
+                      type: string
+                      enum: [Approved, Inactive, Pending, Cancel]
+                      example: Approved
+
+      responses:
+        "200":
+          description: Vehicle updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Vehicle"
+              example:
+                code: 200
+                success: true
+                message: Vehicle updated successfully.
+                data:
+                  id: 1
+                  company_id: 1
+                  branch_id: 1
+                  branch:
+                    id: 1
+                    name: Head Office
+                  brand: Toyota Hiace
+                  year: "2023"
+                  registration_no: DHAKA-METRO-CHA-11-2233
+                  chassis_no: KDH2010012345
+                  status: Approved
+                  created_at: "2026-11-14T10:20:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/VehicleNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/VehicleValidationError"
+
+    delete:
+      tags:
+        - Vehicles
+      summary: Delete vehicle
+      description: |
+        Soft-deletes a vehicle (`deleted_at` is set; the row stays in the database). A deleted
+        vehicle is no longer listed, returns `404` on every other endpoint, and its chassis number
+        can be used again. Vehicles are not used by other records, so there is no in-use check.
+
+        Required permission: `module:system-configuration.menu:vehicle.permission:delete`
+      operationId: deleteVehicle
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/VehicleId"
+
+      responses:
+        "200":
+          description: Vehicle deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 2
+              example:
+                code: 200
+                success: true
+                message: Vehicle deleted successfully.
+                data:
+                  id: 2
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/VehicleNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /vehicles/{id}/status:
+    patch:
+      tags:
+        - Vehicles
+      summary: Change vehicle status
+      description: |
+        Sets the vehicle's status to `Approved` or `Inactive`.
+
+        Required permission: `module:system-configuration.menu:vehicle.permission:change-status`
+      operationId: updateVehicleStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/VehicleId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Vehicle"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 1
+                  company_id: 1
+                  branch_id: 1
+                  branch:
+                    id: 1
+                    name: Head Office
+                  brand: Toyota Hiace
+                  year: "2022"
+                  registration_no: DHAKA-METRO-CHA-11-2233
+                  chassis_no: KDH2010012345
+                  status: Inactive
+                  created_at: "2026-11-14T10:20:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/VehicleNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/StatusValidationError"
+
 components:
   securitySchemes:
     sessionCookie:
@@ -15175,6 +16787,50 @@ components:
       schema:
         type: integer
       example: 267
+
+    CompanyId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Company ID. An unknown, soft-deleted or non-numeric ID, or (for users other than the super
+        admin) a company outside the user's company filter, returns `404`.
+      schema:
+        type: integer
+      example: 1
+
+    FiscalYearId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Fiscal year ID. An unknown, soft-deleted or non-numeric ID, or a fiscal year of another
+        company, returns `404`.
+      schema:
+        type: integer
+      example: 2
+
+    CurrencyId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Currency ID. An unknown, soft-deleted or non-numeric ID, or a currency of another company,
+        returns `404`.
+      schema:
+        type: integer
+      example: 2
+
+    VehicleId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Vehicle ID. An unknown, soft-deleted or non-numeric ID, or a vehicle of another company,
+        returns `404`.
+      schema:
+        type: integer
+      example: 1
 
   schemas:
     SuccessEnvelope:
@@ -17931,6 +19587,299 @@ components:
           type: integer
           example: 1
 
+    Company:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        company_id:
+          type: integer
+          example: 1
+        name:
+          type: [string, "null"]
+          example: FinTrack Test Company
+        email:
+          type: [string, "null"]
+          format: email
+          example: info@example.com
+        phone:
+          type: [string, "null"]
+          example: "01700000001"
+        website:
+          type: [string, "null"]
+          example: https://example.com
+        address:
+          type: [string, "null"]
+          example: Test Road 1, Dhaka
+        tax_identification_number:
+          type: [string, "null"]
+          example: "123456789"
+        logo:
+          type: [string, "null"]
+          description: Stored path. Send it back unchanged in `PUT /companies/{id}` to keep the image.
+          example: public/uploads/logo/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+        logo_url:
+          type: [string, "null"]
+          description: Public URL of `logo` (`null` when there is no logo).
+          example: https://backend-fintrack360.eduguard360.com/storage/uploads/logo/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+        favicon:
+          type: [string, "null"]
+          example: public/uploads/favicon/0bc17898-cd56-4970-8887-7628f75dbef0.png
+        favicon_url:
+          type: [string, "null"]
+          example: https://backend-fintrack360.eduguard360.com/storage/uploads/favicon/0bc17898-cd56-4970-8887-7628f75dbef0.png
+        invoice_logo:
+          type: [string, "null"]
+          example: public/uploads/invoice/cc20fc5d-e8b0-4d9f-ac01-65c570dac062.png
+        invoice_logo_url:
+          type: [string, "null"]
+          example: https://backend-fintrack360.eduguard360.com/storage/uploads/invoice/cc20fc5d-e8b0-4d9f-ac01-65c570dac062.png
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2026-11-14T10:00:00.000000Z"
+
+    CompanyUpdateRequest:
+      type: object
+      description: |
+        Body for `PUT /companies/{id}` (JSON). Rules come from the company form settings (same as
+        the web form), with these checks on top. Files are not accepted; images are sent as paths
+        from `POST /companies/images`.
+      required:
+        - name
+        - email
+        - phone
+        - tax_identification_number
+        - status
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          example: FinTrack Test Company
+        email:
+          type: string
+          format: email
+          maxLength: 55
+          description: Must not be used by another company.
+          example: info@example.com
+        phone:
+          type: string
+          description: |
+            Bangladeshi phone number (e.g. `01700000001`, `+8801700000001`, `02-1234567`); must not
+            be used by another company.
+          example: "01700000001"
+        tax_identification_number:
+          type: string
+          example: "123456789"
+        website:
+          type: [string, "null"]
+          format: uri
+          example: https://example.com
+        address:
+          type: [string, "null"]
+          maxLength: 200
+          example: Test Road 1, Dhaka
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        logo:
+          type: string
+          description: The current path (keep) or a `logo` path from `POST /companies/images` (replace).
+          example: public/uploads/company/tmp/2/logo/4232e041-69da-4b1c-8cc5-672cf87969bc.png
+        favicon:
+          type: string
+          description: The current path (keep) or a `favicon` path from `POST /companies/images` (replace).
+          example: public/uploads/favicon/0bc17898-cd56-4970-8887-7628f75dbef0.png
+        invoice_logo:
+          type: string
+          description: The current path (keep) or an `invoice_logo` path from `POST /companies/images` (replace).
+          example: public/uploads/invoice/cc20fc5d-e8b0-4d9f-ac01-65c570dac062.png
+
+    FiscalYear:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 2
+        company_id:
+          type: integer
+          example: 1
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2026-07-01"
+        fiscal_year:
+          type: [string, "null"]
+          format: date
+          example: "2027-06-30"
+        branch_id:
+          type: [integer, "null"]
+          example: 1
+        branch:
+          $ref: "#/components/schemas/NamedRef"
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2026-11-14T10:20:00.000000Z"
+
+    FiscalYearRequest:
+      type: object
+      description: |
+        Body for create and update. Rules come from the fiscal year form settings (same as the web
+        form), with these checks on top.
+      required:
+        - date
+        - fiscal_year
+      properties:
+        date:
+          type: string
+          format: date
+          description: "`Y-m-d`."
+          example: "2026-07-01"
+        fiscal_year:
+          type: string
+          format: date
+          description: "`Y-m-d`."
+          example: "2027-06-30"
+        branch_id:
+          type: [integer, "null"]
+          description: A branch of the logged-in user's company that is not soft-deleted.
+          example: 1
+
+    Currency:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 2
+        company_id:
+          type: integer
+          example: 1
+        name:
+          type: [string, "null"]
+          example: US Dollar
+        currency_symbol:
+          type: [string, "null"]
+          example: $
+        exchange_rate:
+          type: [number, "null"]
+          description: Stored with 2 decimals.
+          example: 122.5
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2026-11-14T10:20:00.000000Z"
+
+    CurrencyRequest:
+      type: object
+      description: |
+        Body for create and update. Rules come from the currency form settings (same as the web
+        form), with these checks on top.
+      required:
+        - name
+        - currency_symbol
+        - exchange_rate
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          description: Unique within the logged-in user's company (soft-deleted currencies not counted).
+          example: US Dollar
+        currency_symbol:
+          type: string
+          maxLength: 10
+          example: $
+        exchange_rate:
+          type: number
+          exclusiveMinimum: 0
+          description: Greater than 0; stored with 2 decimals.
+          example: 122.5
+
+    Vehicle:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        company_id:
+          type: integer
+          example: 1
+        branch_id:
+          type: integer
+          example: 1
+        branch:
+          $ref: "#/components/schemas/NamedRef"
+        brand:
+          type: [string, "null"]
+          example: Toyota Hiace
+        year:
+          type: [string, "null"]
+          example: "2022"
+        registration_no:
+          type: [string, "null"]
+          example: DHAKA-METRO-CHA-11-2233
+        chassis_no:
+          type: [string, "null"]
+          example: KDH2010012345
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2026-11-14T10:20:00.000000Z"
+
+    VehicleRequest:
+      type: object
+      description: |
+        Body for create and update. Rules come from the vehicle form settings (same as the web
+        form), with these checks on top.
+      required:
+        - branch_id
+        - brand
+        - year
+        - registration_no
+      properties:
+        branch_id:
+          type: integer
+          description: A branch of the logged-in user's company that is not soft-deleted.
+          example: 1
+        brand:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: Toyota Hiace
+        year:
+          type: string
+          pattern: "^[0-9]{4}$"
+          description: 4 digits.
+          example: "2022"
+        registration_no:
+          type: string
+          maxLength: 200
+          example: DHAKA-METRO-CHA-11-2233
+        chassis_no:
+          type: [string, "null"]
+          maxLength: 200
+          description: Must not be used by another vehicle (soft-deleted vehicles not counted).
+          example: KDH2010012345
+
   responses:
     SessionUnavailable:
       description: No session for this origin. The origin is missing from `SANCTUM_STATEFUL_DOMAINS`.
@@ -19876,3 +21825,241 @@ components:
             $ref: "#/components/schemas/FrameworkError"
           example:
             message: Too Many Attempts.
+
+    StatusValidationError:
+      description: Status is missing or not `Approved` / `Inactive`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          example:
+            code: 422
+            success: false
+            message: "Validation Failed. The selected status is invalid. "
+            errors:
+              status:
+                - The selected status is invalid.
+
+    CompanyNotFound:
+      description: No company with this ID, a non-numeric or soft-deleted ID, or (for users other than the super admin) a company outside the user's company filter.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    CompanyValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingName:
+              summary: Name missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+            duplicateEmail:
+              summary: Email already used by another company
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The email has already been taken. "
+                errors:
+                  email:
+                    - The email has already been taken.
+            invalidImagePath:
+              summary: Image path not from POST /companies/images (or expired, or another type)
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The logo must be a logo path from POST /companies/images (uploaded within 24 hours) or the current logo. "
+                errors:
+                  logo:
+                    - The logo must be a logo path from POST /companies/images (uploaded within 24 hours) or the current logo.
+            invalidStatus:
+              summary: Status missing or not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    FiscalYearNotFound:
+      description: No fiscal year with this ID in the logged-in user's company, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    FiscalYearValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingDate:
+              summary: Date missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The date field is required. "
+                errors:
+                  date:
+                    - The date field is required.
+            wrongDateFormat:
+              summary: Fiscal year not in Y-m-d format
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The fiscal year field must match the format Y-m-d. "
+                errors:
+                  fiscal_year:
+                    - The fiscal year field must match the format Y-m-d.
+            invalidBranch:
+              summary: Branch not found in the company
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected branch id is invalid. "
+                errors:
+                  branch_id:
+                    - The selected branch id is invalid.
+            invalidStatus:
+              summary: Update only — status missing or not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    CurrencyNotFound:
+      description: No currency with this ID in the logged-in user's company, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    CurrencyValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingName:
+              summary: Name missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name field is required. "
+                errors:
+                  name:
+                    - The name field is required.
+            duplicateName:
+              summary: Name already used by another currency of the company
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name has already been taken. "
+                errors:
+                  name:
+                    - The name has already been taken.
+            invalidRate:
+              summary: Exchange rate not a number greater than 0
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The exchange rate field must be greater than 0. "
+                errors:
+                  exchange_rate:
+                    - The exchange rate field must be greater than 0.
+            invalidStatus:
+              summary: Update only — status missing or not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+    VehicleNotFound:
+      description: No vehicle with this ID in the logged-in user's company, or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    VehicleValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingBranch:
+              summary: Branch missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The branch id field is required. "
+                errors:
+                  branch_id:
+                    - The branch id field is required.
+            invalidYear:
+              summary: Year not 4 digits
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The year field must be 4 digits. "
+                errors:
+                  year:
+                    - The year field must be 4 digits.
+            duplicateChassis:
+              summary: Chassis number already used by another vehicle
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The chassis no has already been taken. "
+                errors:
+                  chassis_no:
+                    - The chassis no has already been taken.
+            invalidStatus:
+              summary: Update only — status missing or not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
