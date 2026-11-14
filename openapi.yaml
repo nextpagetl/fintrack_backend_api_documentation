@@ -345,6 +345,9 @@ paths:
         permissions grouped as a tree (see `PermissionTree`). `role` is `null` when the
         user has no Spatie role assigned (for example users that only have an old
         `user_roles` role); such users get `403` on every permission-protected endpoint.
+
+        `company` holds the name, address, phone and email of the user's company
+        (company settings), or `null` when no company is found.
       operationId: getCurrentUser
 
       security:
@@ -388,7 +391,12 @@ paths:
                                     permission: [view, create, edit, change-status]
                                   user:
                                     permission: [view]
-                        company_id: 1
+                        company:
+                          id: 1
+                          name: Test Company
+                          address: Test Address, Dhaka
+                          phone: "+8801700000000"
+                          email: test.company@example.com
                         status: Approved
                         email_verified_at: null
                 withoutRole:
@@ -404,7 +412,12 @@ paths:
                         email: test.sales@example.com
                         role_id: 8
                         role: null
-                        company_id: 1
+                        company:
+                          id: 1
+                          name: Test Company
+                          address: Test Address, Dhaka
+                          phone: "+8801700000000"
+                          email: test.company@example.com
                         status: Approved
                         email_verified_at: null
 
@@ -16937,10 +16950,28 @@ components:
               example: Test Manager
             permissions:
               $ref: "#/components/schemas/PermissionTree"
-        company_id:
-          type: [integer, "null"]
-          description: "`0` for the super admin."
-          example: 1
+        company:
+          type: [object, "null"]
+          description: |
+            Company settings of the user's company (from `admin/settings-company-list`).
+            `null` when no company is found (for example the super admin).
+          properties:
+            id:
+              type: integer
+              example: 1
+            name:
+              type: [string, "null"]
+              example: Test Company
+            address:
+              type: [string, "null"]
+              example: Test Address, Dhaka
+            phone:
+              type: [string, "null"]
+              example: "+8801700000000"
+            email:
+              type: [string, "null"]
+              format: email
+              example: test.company@example.com
         status:
           type: string
           example: Approved
