@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.26.0
+  version: 1.27.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -16,6 +16,14 @@ info:
        is authenticated and a new `csrf_token` is returned.
     3. Send the session cookie and the latest `X-CSRF-TOKEN` with every following
        `POST`, `PUT`, `PATCH` and `DELETE` request (for example `POST /logout`, `PUT /roles/{id}`).
+
+    Only users with status `Approved` can log in. If a logged-in user's status is changed to
+    anything else (for example `Inactive` through `PATCH /users/{id}/status`), their next request
+    to any logged-in endpoint is logged out and answered with `401` (see `AccountInactive`):
+
+    ```json
+    { "code": 401, "success": false, "message": "Your account is not active.", "errors": null }
+    ```
 
     ## Response format
     Every response written by the API controllers uses the same envelope:
@@ -45,7 +53,7 @@ info:
 
     ## Permissions
     Role, branch, store, division, district, upazila, union, employee, department, customer group, customer media, customer, supplier group, supplier, unit,
-    brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason, inventory adjustment reason, cost center, non-inventory, account group, chart of account, product, customer opening, supplier opening, inventory opening, opening balance, company, fiscal year, currency and vehicle endpoints also need a Spatie permission, named
+    brand, product category, product type, bank account, account type, pay head config, debit note reason, credit note reason, inventory adjustment reason, cost center, non-inventory, account group, chart of account, product, customer opening, supplier opening, inventory opening, opening balance, company, fiscal year, currency, vehicle, user and general setup endpoints also need a Spatie permission, named
     `module:<module>.menu:<menu>.permission:<action>`. The required permission is listed in
     each endpoint's description; without it the API returns `403`. The `superadmin` role
     passes every permission check.
@@ -146,6 +154,10 @@ tags:
     description: Currency management (System Configuration → Currency)
   - name: Vehicles
     description: Vehicle management (System Configuration → Vehicle)
+  - name: Users
+    description: User management (System Configuration → User)
+  - name: General Setup
+    description: Company settings (System Configuration → General Setup)
 
 paths:
   /csrf-token:
@@ -16430,6 +16442,866 @@ paths:
         "422":
           $ref: "#/components/responses/StatusValidationError"
 
+  /users:
+    get:
+      tags:
+        - Users
+      summary: List users
+      description: |
+        Paginated list of users (API version of the web list `admin/usermanage-user-list`).
+        Superadmin (role 1) sees every user; other users see only users of their own company.
+        Soft-deleted users are not listed. `role` is the user's Spatie role, or `null` when the
+        user has none. The users are in `data.items` and the pagination info in `data.pagination`.
+
+        Required permission: `module:system-configuration.menu:user.permission:view`
+      operationId: listUsers
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, name, email or phone.
+          schema:
+            type: string
+          example: test
+        - name: status
+          in: query
+          description: Only users with this status.
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+        - name: role
+          in: query
+          description: Only users with this Spatie role name.
+          schema:
+            type: string
+          example: admin
+        - name: per_page
+          in: query
+          description: Items per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, name, email, phone, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          description: Any value other than `asc` sorts descending.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: User list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/ManagedUser"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 12
+                      name: Test User
+                      email: test.user@example.com
+                      phone: "01700000001"
+                      role:
+                        id: 2
+                        name: admin
+                      all_employees: 0
+                      sv_id: 5
+                      sr_ids: [7, 8]
+                      status: Approved
+                      created_at: "2026-11-14T06:30:00.000000Z"
+                    - id: 10
+                      name: Test Inactive User
+                      email: test.inactive@example.com
+                      phone: null
+                      role: null
+                      all_employees: 1
+                      sv_id: null
+                      sr_ids: []
+                      status: Inactive
+                      created_at: "2026-11-01T09:00:00.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 2
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      tags:
+        - Users
+      summary: Create user
+      description: |
+        Creates a user (API version of the web form `admin/usermanage-user-create`). The validation
+        rules come from the user form settings (same as the web form), with these checks on top:
+
+        - `password` is required (min 6) and must match `password_confirmation`.
+        - `role_id` must be an `Active` Spatie role (`GET /roles`). The role is assigned to the user;
+          the same id is also saved in the old `users.role_id` / role access, as the web form does.
+        - `all_employees`: `true` gives access to all employees. `false`, `0` or not sent saves `0`,
+          and then `sv_id` and `sr_ids` are required.
+        - `sv_id` must be a supervisor (an employee whose `parent_id` is their own id).
+        - every `sr_ids` value must be an employee under that supervisor
+          (the same list as the web form's sales representatives).
+        - `company_id` is the logged-in user's company; it is not read from the body.
+        - `status` is always saved as `Approved`.
+
+        Required permission: `module:system-configuration.menu:user.permission:create`
+      operationId: createUser
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserCreateRequest"
+            examples:
+              allEmployees:
+                summary: Access to all employees
+                value:
+                  name: Test User
+                  email: test.user@example.com
+                  phone: "01700000001"
+                  password: secret12
+                  password_confirmation: secret12
+                  role_id: 2
+                  all_employees: true
+              supervisor:
+                summary: Access through a supervisor and sales representatives
+                value:
+                  name: Test User
+                  email: test.user@example.com
+                  phone: "01700000001"
+                  password: secret12
+                  password_confirmation: secret12
+                  role_id: 2
+                  all_employees: false
+                  sv_id: 4
+                  sr_ids: [16, 17]
+
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ManagedUser"
+              example:
+                code: 201
+                success: true
+                message: User created successfully.
+                data:
+                  id: 15
+                  name: Test User
+                  email: test.user@example.com
+                  phone: "01700000001"
+                  role:
+                    id: 2
+                    name: admin
+                  all_employees: 0
+                  sv_id: 4
+                  sr_ids: [16, 17]
+                  status: Approved
+                  created_at: "2026-11-14T10:00:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/UserValidationError"
+
+  /users/{id}:
+    put:
+      tags:
+        - Users
+      summary: Update user
+      description: |
+        Updates a user (API version of the web edit form `admin/usermanage-user-edit/{id}`).
+        Send the full user data: every field is saved from the body. The rules are the same as
+        create, with these differences:
+
+        - `email` and `phone` must not be used by another user; the user's own values may be kept.
+        - `password` is optional. Empty or not sent keeps the current password.
+        - `status` is required (`Approved`, `Inactive`, `Pending` or `Cancel`). A user cannot set
+          their own status to anything other than `Approved`. A user set to another status is
+          logged out on their next request (`AccountInactive`).
+        - The Spatie role is replaced with `role_id`.
+
+        Required permission: `module:system-configuration.menu:user.permission:edit`
+      operationId: updateUser
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/UserId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserUpdateRequest"
+            example:
+              name: Test User Updated
+              email: test.user@example.com
+              phone: "01700000001"
+              role_id: 2
+              status: Approved
+              all_employees: false
+              sv_id: 4
+              sr_ids: [16, 17]
+
+      responses:
+        "200":
+          description: User updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ManagedUser"
+              example:
+                code: 200
+                success: true
+                message: User updated successfully.
+                data:
+                  id: 15
+                  name: Test User Updated
+                  email: test.user@example.com
+                  phone: "01700000001"
+                  role:
+                    id: 2
+                    name: admin
+                  all_employees: 0
+                  sv_id: 4
+                  sr_ids: [16, 17]
+                  status: Approved
+                  created_at: "2026-11-14T10:00:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/UserNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/UserValidationError"
+
+    delete:
+      tags:
+        - Users
+      summary: Delete user
+      description: |
+        Removes the user's Spatie role and soft-deletes the user (`deleted_at` is set; the row
+        stays in the database). A deleted user is no longer listed, returns `404` on every other
+        endpoint, and is logged out on their next request.
+
+        The deleted user's email and phone are still counted as used, so a new user cannot be
+        created with them (`422`, "has already been taken").
+
+        Required permission: `module:system-configuration.menu:user.permission:delete`
+      operationId: deleteUser
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/UserId"
+
+      responses:
+        "200":
+          description: User deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 15
+              example:
+                code: 200
+                success: true
+                message: User deleted successfully.
+                data:
+                  id: 15
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/UserNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /users/{id}/status:
+    patch:
+      tags:
+        - Users
+      summary: Change user status
+      description: |
+        Sets the user's status to `Approved` or `Inactive`. A user cannot set themselves
+        `Inactive`. An `Inactive` user cannot log in, and if already logged in is logged out on
+        their next request (`AccountInactive`).
+
+        Required permission: `module:system-configuration.menu:user.permission:change-status`
+      operationId: updateUserStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/UserId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ManagedUser"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 12
+                  name: Test User
+                  email: test.user@example.com
+                  phone: "01700000001"
+                  role:
+                    id: 2
+                    name: admin
+                  all_employees: 0
+                  sv_id: 5
+                  sr_ids: [7, 8]
+                  status: Inactive
+                  created_at: "2026-11-14T06:30:00.000000Z"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/UserNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Status missing or invalid, or a user setting themselves `Inactive`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              examples:
+                invalidStatus:
+                  summary: Status missing or not Approved / Inactive
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The selected status is invalid. "
+                    errors:
+                      status:
+                        - The selected status is invalid.
+                self:
+                  summary: Own account set Inactive
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. You cannot set your own account Inactive. "
+                    errors:
+                      status:
+                        - You cannot set your own account Inactive.
+
+  /general-setup/{id}:
+    get:
+      tags:
+        - General Setup
+      summary: Get general setup
+      description: |
+        Returns the company's general setup (the data of the web edit page
+        `admin/settings-general_setup-edit/{id}`). There is one setup per company; use id `1`.
+
+        Fields are grouped by the sections (tabs) of the web edit page. Chart of account fields in
+        `coa_configuration` are arrays of chart of account ids. `general.currency` and
+        `general.language` are `null` when the saved currency / language does not exist.
+
+        Required permission: `module:system-configuration.menu:general-setup.permission:view`
+      operationId: getGeneralSetup
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/GeneralSetupId"
+
+      responses:
+        "200":
+          description: General setup
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/GeneralSetup"
+              example:
+                code: 200
+                success: true
+                message: Detail data
+                data:
+                  id: 1
+                  status: Approved
+                  updated_at: "2026-10-27T17:56:39.000000Z"
+                  general:
+                    is_branch: Single Branch
+                    is_store: 1
+                    default_supplementary_duty: null
+                    is_vat_and_sd: 0
+                    default_vat: null
+                    default_datatable_list_number: 25
+                    transaction_edit_days: 10
+                    input_display_type: Horizontal
+                    stock_account_method: FIFO
+                    currencie_id: 10
+                    language_id: 7
+                    currency_position: Left
+                    timezone: Asia/Dhaka
+                    dateformat: YYYY-MM-DD
+                    opening_date: "2024-12-31"
+                    decimal_separate: ","
+                    price_calculate_type: Faction
+                    price_decimal_point: 4
+                    thousand_separate: ","
+                    discount_type: Discount %
+                    voucher_length: "8"
+                    currency:
+                      id: 10
+                      name: Test Currency
+                    language:
+                      id: 7
+                      name: Test Language
+                  purchases:
+                    product_prefix: PRID
+                    supplier_prefix: SUID
+                    purchases_order_prefix: POID
+                    purchases_requisition_prefix: PRID
+                    purchases_prefix: PUID
+                    purchases_pending_cheque_prefix: PEID
+                    purchases_payment_prefix: PAID
+                    inventory_approval: Auto Approval
+                    purchases_return_approval: Auto Approval
+                    purchases_mrr: "Yes"
+                    mrr_approval: Pending Approval
+                    purchases_sms: "No"
+                    purchases_email: "No"
+                    purchases_download: "No"
+                  sales:
+                    customer_prefix: CUID
+                    sales_prefix: SAID
+                    sales_payment_prefix: SAIP
+                    sales_loan_prefix: SLID
+                    sales_return_prefix: SRID
+                    delivery_challans_prefix: DCID
+                    sales_quatation_prefix: SQID
+                    sales_pending_cheque_prefix: SEID
+                    customer_adjust_prefix: CAID
+                    sales_approval: Auto Approval
+                    sales_loan_approval: Auto Approval
+                    sales_return_approval: Auto Approval
+                    delivery_challan: "Yes"
+                    challan_approval: Auto Approval
+                    sales_commission: "Yes"
+                    sales_commission_type: Comm./PCS
+                    sales_sms: "No"
+                    sales_email: "No"
+                    sales_download: "No"
+                  account:
+                    head_prefix: ACID
+                    payment_voucher_prefix: PVID
+                    receive_voucher_prefix: RVID
+                    journal_voucher_prefix: JVID
+                    contra_voucher_prefix: CVID
+                    account_approval: Auto Approval
+                    payment_voucher_approval: Auto Approval
+                    receive_voucher_approval: Auto Approval
+                    journal_voucher_approval: Auto Approval
+                    account_sms: "No"
+                    account_email: "No"
+                    account_download: "No"
+                  service:
+                    service_prefix: SEID
+                    service_invoice_prefix: SIID
+                    service_quatation_prefix: SQID
+                    service_payment_prefix: SPID
+                    service_pending_cheque_prefix: SPCI
+                    service_invoice_approbal: Auto Approval
+                    service_sms: "No"
+                    service_email: "No"
+                    service_download: "No"
+                  opening:
+                    customer_opening_prefix: COID
+                    supplier_opening_prefix: SOID
+                    inventory_opening_prefix: IOID
+                  pos:
+                    pos_prefix: POS
+                    pos_approval: Auto Approval
+                    deposit_account_id: null
+                  inventory_adjustment:
+                    inventory_adjust_prefix: IAID
+                    inventory_adjust_approval: Auto Approval
+                  coa_configuration:
+                    cheque_clearance_accounts: [4, 44, 45, 46, 47, 48, 50, 54, 55, 183, 191, 192]
+                    accounts_payable: [18]
+                    accounts_receivable: [11]
+                    work_in_progress: [401]
+                    cheque_in_hand: [12]
+                    adjustment_account: [39]
+                    inventory_stock: [9]
+                    sales: [31]
+                    cost_of_goods: [34]
+                    wip_adjusted_expense: [413]
+                    bad_debts_reserve_fund: [23]
+                    loan_stock: [10]
+                    default_cash_in_hand: [4]
+                    assets: [1]
+                    liability: [16]
+                    owners_equity: [24]
+                    sales_revenue: [30]
+                    income: [29]
+                    expense: [36]
+                    vat_and_sd_payable: [20]
+                    vat_and_sd_expense: [41]
+                    service_sales: [33]
+                  manufacturing:
+                    bom_prefix: BOM
+                    wip_prefix: WIP
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/GeneralSetupNotFound"
+
+  /general-setup/{id}/{section}:
+    put:
+      tags:
+        - General Setup
+      summary: Update a general setup section
+      description: |
+        Saves one section (tab) of the general setup, the same way the web edit page saves a tab
+        (`admin/settings-general_setup-update/{id}`). Send only that section's fields, in the same
+        shape as the web form. The response is the whole setup, as `GET /general-setup/{id}`.
+
+        It works exactly like the web save:
+
+        - The only validation is the web form settings, where every field is optional.
+          Values are not checked against the web dropdown options; a value that does not fit the
+          database column fails with `500`.
+        - An empty or missing value keeps the current value (a field cannot be cleared).
+        - `general`: `is_store` and `is_vat_and_sd` not sent are saved as `0`. `is_branch` not sent
+          or `No` saves `0` and turns off the Branch and Store menus; otherwise the Branch menu
+          (and the Store menu when `is_store` is set) is turned on.
+        - `purchases`: `purchases_mrr` empty clears `mrr_approval` and turns off the MRR menu;
+          any value turns the MRR menu on (also `No`).
+        - `sales`: `delivery_challan` empty clears `challan_approval` and turns off the Delivery
+          Challan menu; any value turns it on (also `No`).
+        - `coa_configuration`: every field is an array of chart of account ids
+          (`cheque_clearance_accounts` can have several, the others one).
+        - `service_payment_prefix`, `service_pending_cheque_prefix`, `pos_prefix` and
+          `bad_debts_reserve_fund` are shown by `GET` but never saved.
+        - `status` is set to `Approved`, and `company_id` to the logged-in user's company.
+        - The whole application cache is cleared after saving.
+
+        Required permission: `module:system-configuration.menu:general-setup.permission:edit`
+      operationId: updateGeneralSetupSection
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/GeneralSetupId"
+        - $ref: "#/components/parameters/GeneralSetupSection"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: |
+                The fields of the section in the path, with the same names as in
+                `GET /general-setup/{id}` (see `GeneralSetup`). Fields of other sections are ignored.
+              additionalProperties: true
+            examples:
+              general:
+                summary: "section = general"
+                value:
+                  is_branch: Single Branch
+                  is_store: 1
+                  is_vat_and_sd: 0
+                  default_datatable_list_number: 25
+                  transaction_edit_days: 10
+                  input_display_type: Horizontal
+                  stock_account_method: FIFO
+                  currencie_id: 10
+                  language_id: 7
+                  currency_position: Left
+                  timezone: Asia/Dhaka
+                  dateformat: YYYY-MM-DD
+                  opening_date: "2024-12-31"
+                  decimal_separate: ","
+                  price_calculate_type: Faction
+                  price_decimal_point: 4
+                  thousand_separate: ","
+                  discount_type: Discount %
+                  voucher_length: "8"
+              purchases:
+                summary: "section = purchases"
+                value:
+                  product_prefix: PRID
+                  supplier_prefix: SUID
+                  purchases_order_prefix: POID
+                  purchases_requisition_prefix: PRID
+                  purchases_prefix: PUID
+                  purchases_pending_cheque_prefix: PEID
+                  purchases_payment_prefix: PAID
+                  inventory_approval: Auto Approval
+                  purchases_return_approval: Auto Approval
+                  purchases_mrr: "Yes"
+                  mrr_approval: Pending Approval
+                  purchases_sms: "No"
+                  purchases_email: "No"
+                  purchases_download: "No"
+              opening:
+                summary: "section = opening"
+                value:
+                  customer_opening_prefix: COID
+                  supplier_opening_prefix: SOID
+                  inventory_opening_prefix: IOID
+              coa_configuration:
+                summary: "section = coa_configuration"
+                value:
+                  cheque_clearance_accounts: [4, 44, 45]
+                  accounts_payable: [18]
+                  accounts_receivable: [11]
+                  default_cash_in_hand: [4]
+
+      responses:
+        "200":
+          description: Section saved; the whole setup is returned
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/GeneralSetup"
+              example:
+                code: 200
+                success: true
+                message: General setup updated successfully.
+                data:
+                  id: 1
+                  status: Approved
+                  updated_at: "2026-11-14T11:00:00.000000Z"
+                  opening:
+                    customer_opening_prefix: COID
+                    supplier_opening_prefix: SOID
+                    inventory_opening_prefix: IOID
+                  "...": "(every other section, as GET /general-setup/{id})"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/GeneralSetupNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /general-setup/{id}/status:
+    patch:
+      tags:
+        - General Setup
+      summary: Change general setup status
+      description: |
+        Sets the general setup status to `Approved` or `Inactive` (the web list toggle).
+        The status is only stored: the application reads the settings whatever the status is,
+        so `Inactive` does not switch any setting off.
+
+        Required permission: `module:system-configuration.menu:general-setup.permission:change-status`
+      operationId: updateGeneralSetupStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/GeneralSetupId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Approved, Inactive]
+                  example: Inactive
+
+      responses:
+        "200":
+          description: Status updated; the whole setup is returned
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/GeneralSetup"
+              example:
+                code: 200
+                success: true
+                message: Status updated successfully.
+                data:
+                  id: 1
+                  status: Inactive
+                  updated_at: "2026-11-14T11:05:00.000000Z"
+                  "...": "(every section, as GET /general-setup/{id})"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/GeneralSetupNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/StatusValidationError"
+
 components:
   securitySchemes:
     sessionCookie:
@@ -16844,6 +17716,38 @@ components:
       schema:
         type: integer
       example: 1
+
+    UserId:
+      name: id
+      in: path
+      required: true
+      description: |
+        User ID. An unknown, soft-deleted or non-numeric ID, or a user of another company
+        (for users other than superadmin), returns `404`.
+      schema:
+        type: integer
+      example: 12
+
+    GeneralSetupId:
+      name: id
+      in: path
+      required: true
+      description: |
+        General setup ID (one per company; `1`). An unknown or non-numeric ID, or the setup of
+        another company (for users other than superadmin), returns `404`.
+      schema:
+        type: integer
+      example: 1
+
+    GeneralSetupSection:
+      name: section
+      in: path
+      required: true
+      description: The section (tab of the web edit page) to save. Any other value returns `404`.
+      schema:
+        type: string
+        enum: [general, purchases, sales, account, service, opening, pos, inventory_adjustment, coa_configuration, manufacturing]
+      example: opening
 
   schemas:
     SuccessEnvelope:
@@ -19911,6 +20815,327 @@ components:
           description: Must not be used by another vehicle (soft-deleted vehicles not counted).
           example: KDH2010012345
 
+    ManagedUser:
+      type: object
+      description: A user as returned by the user management endpoints.
+      properties:
+        id:
+          type: integer
+          example: 12
+        name:
+          type: string
+          example: Test User
+        email:
+          type: string
+          format: email
+          example: test.user@example.com
+        phone:
+          type: [string, "null"]
+          example: "01700000001"
+        role:
+          description: The user's Spatie role, or `null` when the user has none.
+          oneOf:
+            - $ref: "#/components/schemas/NamedRef"
+            - type: "null"
+        all_employees:
+          type: integer
+          enum: [0, 1]
+          description: "`1`: access to all employees. `0`: access through `sv_id` and `sr_ids`."
+          example: 0
+        sv_id:
+          type: [integer, "null"]
+          description: Supervisor employee ID.
+          example: 5
+        sr_ids:
+          type: array
+          description: Sales representative employee IDs.
+          items:
+            type: integer
+          example: [7, 8]
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2026-11-14T06:30:00.000000Z"
+
+    UserCreateRequest:
+      type: object
+      required:
+        - name
+        - email
+        - phone
+        - password
+        - password_confirmation
+        - role_id
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: Test User
+        email:
+          type: string
+          format: email
+          description: Must not be used by another user (soft-deleted users are counted).
+          example: test.user@example.com
+        phone:
+          type: string
+          description: |
+            Bangladesh phone number (for example `01700000001` or `+8801700000001`). Must not be
+            used by another user (soft-deleted users are counted).
+          example: "01700000001"
+        password:
+          type: string
+          minLength: 6
+          example: secret12
+        password_confirmation:
+          type: string
+          minLength: 6
+          description: Must be the same as `password`.
+          example: secret12
+        role_id:
+          type: integer
+          description: An `Active` Spatie role ID (`GET /roles`).
+          example: 2
+        all_employees:
+          type: boolean
+          default: false
+          description: "`true`/`1`: access to all employees. `false`/`0`/not sent: `sv_id` and `sr_ids` are required."
+          example: false
+        sv_id:
+          type: integer
+          description: |
+            Required when `all_employees` is false. A supervisor: an employee (not soft-deleted)
+            whose `parent_id` is their own id.
+          example: 4
+        sr_ids:
+          type: array
+          minItems: 1
+          description: |
+            Required when `all_employees` is false. Distinct employee IDs (not soft-deleted) whose
+            `parent_id` is `sv_id`.
+          items:
+            type: integer
+          example: [16, 17]
+
+    UserUpdateRequest:
+      type: object
+      required:
+        - name
+        - email
+        - phone
+        - role_id
+        - status
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: Test User Updated
+        email:
+          type: string
+          format: email
+          description: Must not be used by another user; the user's own email may be kept.
+          example: test.user@example.com
+        phone:
+          type: string
+          description: Bangladesh phone number. Must not be used by another user; the user's own phone may be kept.
+          example: "01700000001"
+        password:
+          type: [string, "null"]
+          minLength: 6
+          description: Optional. Empty or not sent keeps the current password.
+          example: newpass1
+        password_confirmation:
+          type: [string, "null"]
+          description: Required with `password`; must be the same.
+          example: newpass1
+        role_id:
+          type: integer
+          description: An `Active` Spatie role ID (`GET /roles`); replaces the user's role.
+          example: 2
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          description: A user cannot set their own status to anything other than `Approved`.
+          example: Approved
+        all_employees:
+          type: boolean
+          default: false
+          example: false
+        sv_id:
+          type: integer
+          description: Required when `all_employees` is false (same rule as create).
+          example: 4
+        sr_ids:
+          type: array
+          minItems: 1
+          description: Required when `all_employees` is false (same rule as create).
+          items:
+            type: integer
+          example: [16, 17]
+
+    GeneralSetup:
+      type: object
+      description: |
+        The company's general setup, grouped by the sections (tabs) of the web edit page.
+        Text values are returned as saved. Dropdown values in the web form:
+        approvals `Auto Approval` / `Pending Approval`; Yes/No fields `Yes` / `No`.
+      properties:
+        id:
+          type: integer
+          example: 1
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        updated_at:
+          type: [string, "null"]
+          format: date-time
+        general:
+          type: object
+          properties:
+            is_branch:
+              type: [string, "null"]
+              description: "`No`, `Single Branch` or `Multiple Branch` (`0` when switched off)."
+            is_store:
+              type: [integer, "null"]
+              enum: [0, 1, null]
+            default_supplementary_duty:
+              type: [number, "null"]
+            is_vat_and_sd:
+              type: [integer, "null"]
+              enum: [0, 1, null]
+            default_vat:
+              type: [number, "null"]
+            default_datatable_list_number:
+              type: [integer, "null"]
+            transaction_edit_days:
+              type: [integer, "null"]
+            input_display_type:
+              type: [string, "null"]
+              description: "`Horizontal` or `Vertical`."
+            stock_account_method:
+              type: [string, "null"]
+              description: "`FIFO` or `LIFO`."
+            currencie_id:
+              type: [integer, "null"]
+            language_id:
+              type: [integer, "null"]
+            currency_position:
+              type: [string, "null"]
+              description: "`Left` or `Right`."
+            timezone:
+              type: [string, "null"]
+            dateformat:
+              type: [string, "null"]
+              example: YYYY-MM-DD
+            opening_date:
+              type: [string, "null"]
+              format: date
+            decimal_separate:
+              type: [string, "null"]
+            price_calculate_type:
+              type: [string, "null"]
+              description: "`Round` or `Faction`."
+            price_decimal_point:
+              type: [integer, "null"]
+              description: 1–6.
+            thousand_separate:
+              type: [string, "null"]
+            discount_type:
+              type: [string, "null"]
+              description: "`Discount %`, `Fixed Dis` or `Dis./PCS`."
+            voucher_length:
+              type: [string, "null"]
+            currency:
+              description: The saved currency, or `null` when it does not exist.
+              oneOf:
+                - $ref: "#/components/schemas/NamedRef"
+                - type: "null"
+            language:
+              description: The saved language, or `null` when it does not exist.
+              oneOf:
+                - $ref: "#/components/schemas/NamedRef"
+                - type: "null"
+        purchases:
+          type: object
+          description: |
+            `product_prefix`, `supplier_prefix`, `purchases_order_prefix`, `purchases_requisition_prefix`,
+            `purchases_prefix`, `purchases_pending_cheque_prefix`, `purchases_payment_prefix`,
+            `inventory_approval`, `purchases_return_approval`, `purchases_mrr`, `mrr_approval`,
+            `purchases_sms`, `purchases_email`, `purchases_download`.
+          additionalProperties:
+            type: [string, "null"]
+        sales:
+          type: object
+          description: |
+            `customer_prefix`, `sales_prefix`, `sales_payment_prefix`, `sales_loan_prefix`, `sales_return_prefix`,
+            `delivery_challans_prefix`, `sales_quatation_prefix`, `sales_pending_cheque_prefix`,
+            `customer_adjust_prefix`, `sales_approval`, `sales_loan_approval`, `sales_return_approval`,
+            `delivery_challan`, `challan_approval`, `sales_commission`,
+            `sales_commission_type` (`Commission %`, `Fixed Comm` or `Comm./PCS`),
+            `sales_sms`, `sales_email`, `sales_download`.
+          additionalProperties:
+            type: [string, "null"]
+        account:
+          type: object
+          description: |
+            `head_prefix`, `payment_voucher_prefix`, `receive_voucher_prefix`, `journal_voucher_prefix`,
+            `contra_voucher_prefix`, `account_approval`, `payment_voucher_approval`,
+            `receive_voucher_approval`, `journal_voucher_approval`, `account_sms`, `account_email`,
+            `account_download`.
+          additionalProperties:
+            type: [string, "null"]
+        service:
+          type: object
+          description: |
+            `service_prefix`, `service_invoice_prefix`, `service_quatation_prefix`, `service_payment_prefix`,
+            `service_pending_cheque_prefix`, `service_invoice_approbal`, `service_sms`, `service_email`,
+            `service_download`. `service_payment_prefix` and `service_pending_cheque_prefix` cannot be
+            changed through the update endpoint.
+          additionalProperties:
+            type: [string, "null"]
+        opening:
+          type: object
+          description: "`customer_opening_prefix`, `supplier_opening_prefix`, `inventory_opening_prefix`."
+          additionalProperties:
+            type: [string, "null"]
+        pos:
+          type: object
+          description: |
+            `pos_prefix` (cannot be changed through the update endpoint), `pos_approval`,
+            `deposit_account_id` (chart of account ID or `null`).
+          additionalProperties:
+            type: [string, integer, "null"]
+        inventory_adjustment:
+          type: object
+          description: "`inventory_adjust_prefix`, `inventory_adjust_approval`."
+          additionalProperties:
+            type: [string, "null"]
+        coa_configuration:
+          type: object
+          description: |
+            Chart of account IDs, each field an array (empty when not set):
+            `cheque_clearance_accounts` (several), `accounts_payable`, `accounts_receivable`,
+            `work_in_progress`, `cheque_in_hand`, `adjustment_account`, `inventory_stock`, `sales`,
+            `cost_of_goods`, `wip_adjusted_expense`, `bad_debts_reserve_fund` (cannot be changed through
+            the update endpoint), `loan_stock`, `default_cash_in_hand`, `assets`, `liability`,
+            `owners_equity`, `sales_revenue`, `income`, `expense`, `vat_and_sd_payable`,
+            `vat_and_sd_expense`, `service_sales`.
+          additionalProperties:
+            type: array
+            items:
+              type: integer
+        manufacturing:
+          type: object
+          description: "`bom_prefix`, `wip_prefix`."
+          additionalProperties:
+            type: [string, "null"]
+
   responses:
     SessionUnavailable:
       description: No session for this origin. The origin is missing from `SANCTUM_STATEFUL_DOMAINS`.
@@ -22094,3 +23319,125 @@ components:
                 errors:
                   status:
                     - The selected status is invalid.
+
+    AccountInactive:
+      description: |
+        The logged-in user's status is no longer `Approved` (for example set `Inactive`). The user is
+        logged out. Returned by every logged-in endpoint.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 401
+            success: false
+            message: Your account is not active.
+            errors: null
+
+    UserNotFound:
+      description: No user with this ID (in the logged-in user's company, for users other than superadmin), or a non-numeric or soft-deleted ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    UserValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          examples:
+            missingPassword:
+              summary: Create only — password missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The password field is required. The password confirmation field is required. "
+                errors:
+                  password:
+                    - The password field is required.
+                  password_confirmation:
+                    - The password confirmation field is required.
+            passwordMismatch:
+              summary: Password confirmation does not match
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The password confirmation does not match. "
+                errors:
+                  password:
+                    - The password confirmation does not match.
+            duplicateEmail:
+              summary: Email already used by another user
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The email has already been taken. "
+                errors:
+                  email:
+                    - The email has already been taken.
+            invalidRole:
+              summary: Role not found or not Active
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected role id is invalid. "
+                errors:
+                  role_id:
+                    - The selected role id is invalid.
+            missingSupervisor:
+              summary: all_employees false without supervisor / sales representatives
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The sv id field is required. The sr ids field is required. "
+                errors:
+                  sv_id:
+                    - The sv id field is required.
+                  sr_ids:
+                    - The sr ids field is required.
+            salesRepNotUnderSupervisor:
+              summary: A sales representative is not under the supervisor
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected sr_ids.0 is invalid. "
+                errors:
+                  sr_ids.0:
+                    - The selected sr_ids.0 is invalid.
+            invalidStatus:
+              summary: Update only — status missing or not Approved / Inactive / Pending / Cancel
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+            ownStatus:
+              summary: Update only — own status set to something other than Approved
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. You cannot set your own account to Inactive. "
+                errors:
+                  status:
+                    - You cannot set your own account to Inactive.
+
+    GeneralSetupNotFound:
+      description: No general setup with this ID (for the logged-in user's company, for users other than superadmin), a non-numeric ID, or (update only) an unknown section.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
