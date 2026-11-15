@@ -83,7 +83,18 @@ tags:
   - name: Roles
     description: User role management (Spatie permission)
   - name: Branches
-    description: Branch management (Settings → Branch)
+    description: |
+      Branch management (Settings → Branch).
+
+      **Branch access permissions:** every branch gets a Spatie permission
+      `module:branch-access.menu:{slug}.permission:view`, created with the branch and removed when it
+      is deleted. The slug is the English name in lowercase with spaces as `-` (`Head Office` →
+      `head-office`); a name in other scripts (e.g. Bangla) uses `branch-{id}`. Names are unique, so
+      two branches never share a permission. The `admin` role gets every branch permission. Other
+      roles get a branch permission by ticking it on the role. Renaming a branch renames its
+      permission (the role assignment is kept). A branch that is assigned to a role cannot be
+      deleted (409). These permissions are only used to limit data by branch; they are not
+      endpoints.
   - name: Stores
     description: Store management (Settings → Store)
   - name: Divisions
@@ -967,11 +978,15 @@ paths:
         Creates a branch for the logged-in user's company. The validation rules are the same
         as the web form (`admin/settings-branch-create`), read from the branch form settings.
 
-        - `status` is always saved as `Approved`, even if another value is sent.
+        - `status` is `Approved` when not sent; `Approved` or `Inactive` can be sent.
+        - `name` must be unique (not case-sensitive; spaces and `-` count as the same, so `Dhaka`,
+          `dhaka` and `Dha ka` clash with `Dha-ka`). Names in other scripts (e.g. Bangla) must match exactly.
         - `phone` and `email` must be unique across **all** branches (every company, including
           soft-deleted branches).
         - Setting `is_default` to `Yes` does **not** change the old default branch to `NO`;
           update the old one yourself so the company keeps exactly one default branch.
+        - A Spatie permission for the branch is created with it:
+          `module:branch-access.menu:{slug}.permission:view` (see "Branch access permissions").
 
         Required permission: `module:system-configuration.menu:branch.permission:create`
       operationId: createBranch
@@ -1041,10 +1056,13 @@ paths:
         **Send the full branch data.** Every field is set from the body, so a missing `email` or
         `address` is saved as `null`.
 
-        - `status` is always saved as `Approved`, so updating an `Inactive` branch makes it active
-          again. Use `PATCH /branches/{id}/status` afterwards if needed.
+        - `status` is taken from the body when sent (`Approved` or `Inactive`); when not sent, the
+          current status is kept (an `Inactive` branch stays `Inactive`).
+        - `name` must be unique, as on create (the branch's own name is not counted).
         - `company_id` is set to the logged-in user's company.
         - Setting `is_default` to `Yes` does **not** change the old default branch to `NO`.
+        - If the name changes, the branch's permission is renamed too. The role assignments are kept,
+          because the permission row keeps its id (see "Branch access permissions").
 
         Required permission: `module:system-configuration.menu:branch.permission:edit`
       operationId: updateBranch
@@ -1114,7 +1132,11 @@ paths:
 
         The branch cannot be deleted (`409`) when:
         - it is the default branch (`is_default = Yes`), or
-        - it is used by any store, stock summary, customer or supplier (`errors.used_in` lists which).
+        - it is used by any store, stock summary, customer or supplier (`errors.used_in` lists which), or
+        - a role has the branch's permission (`errors.used_in` contains `roles` and `errors.roles`
+          lists the role names). Remove the branch from those roles first.
+
+        When the branch is deleted, its permission is removed too.
 
         Other tables (sales, purchases, ledger, …) are not checked.
 
@@ -1182,6 +1204,15 @@ paths:
                     message: Branch is in use and cannot be deleted.
                     errors:
                       used_in: [stores, stock_summaries, customers]
+                roleInUse:
+                  summary: Branch assigned to a role
+                  value:
+                    code: 409
+                    success: false
+                    message: Branch is in use and cannot be deleted.
+                    errors:
+                      used_in: [roles]
+                      roles: [Manager, Sales]
 
         "419":
           $ref: "#/components/responses/CsrfMismatch"
@@ -17923,8 +17954,10 @@ components:
     BranchRequest:
       type: object
       description: |
-        Body for create and update. Rules come from the branch form settings (same as the web form).
-        `status` is not taken from the body; the branch is always saved as `Approved`.
+        Body for create and update. Rules come from the branch form settings (same as the web form),
+        plus the rules below.
+        `status` is optional: `Approved` or `Inactive`. On create, `Approved` is used when not sent;
+        on update, the current status is kept when not sent.
       required:
         - name
         - phone
@@ -17933,6 +17966,9 @@ components:
           type: string
           minLength: 2
           maxLength: 100
+          description: |
+            Must be unique (not case-sensitive; spaces and `-` are ignored when comparing English names,
+            so `Dhaka`, `dhaka` and `Dha ka` clash with `Dha-ka`).
           example: Test Branch Three
         phone:
           type: string
@@ -17954,6 +17990,12 @@ components:
           enum: ["Yes", "NO", null]
           description: "Missing or `null` is saved as `null` (not a default branch)."
           example: "NO"
+        status:
+          type: string
+          enum: [Approved, Inactive]
+          description: |
+            Optional. Create: `Approved` when not sent. Update: the current status when not sent.
+          example: Approved
 
     Store:
       type: object
