@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.27.0
+  version: 1.28.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -169,6 +169,10 @@ tags:
     description: User management (System Configuration → User)
   - name: General Setup
     description: Company settings (System Configuration → General Setup)
+  - name: Purchases Requisitions
+    description: Purchases requisitions (Purchases Manage → Purchases Requisition)
+  - name: Purchases Orders
+    description: Purchases orders (Purchases Manage → Purchases Order)
 
 paths:
   /csrf-token:
@@ -17333,6 +17337,476 @@ paths:
         "422":
           $ref: "#/components/responses/StatusValidationError"
 
+  /purchases-requisitions:
+    get:
+      tags:
+        - Purchases Requisitions
+      summary: List purchases requisitions
+      description: |
+        Paginated list of purchases requisitions (API version of the web list
+        `admin/inventory-transaction-purchases-requisition-list`).
+
+        - Only the logged-in user's company, dated on or after the **opening date**
+          (general setup `opening_date`) — same rows as the web list.
+        - **Branch limit:** only requisitions of the branches the user's roles have a branch access
+          permission for (`module:branch-access.menu:{branch}.permission:view`). Superadmin sees
+          every branch; a user with no branch permission gets an empty list.
+        - `can_edit`: the user has the edit permission and `requisition_status` is `Pending`.
+        - `can_delete`: the user has the delete permission and **both** `requisition_status` and
+          `purchases_order_status` are `Pending` (the only case `DELETE` accepts).
+
+        Required permission: `module:purchases-manage.menu:purchases-requisition.permission:view`
+      operationId: listPurchasesRequisitions
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, voucher no, date, total qty, note, either status, branch name or department name.
+          schema:
+            type: string
+          example: PRID
+        - name: branch_id
+          in: query
+          schema:
+            type: integer
+          example: 1
+        - name: department_id
+          in: query
+          schema:
+            type: integer
+          example: 22
+        - name: requisition_status
+          in: query
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+        - name: purchases_order_status
+          in: query
+          description: "`Pending` = no purchases order made from it yet. Use `requisition_status=Approved&purchases_order_status=Pending` for the requisitions a purchases order can be made from."
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+        - name: from_date
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2026-11-01"
+        - name: to_date
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2026-11-30"
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, date, voucher_no, total_qty, requisition_status, purchases_order_status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+        - name: per_page
+          in: query
+          description: Rows per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+
+      responses:
+        "200":
+          description: Purchases requisitions
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/PurchasesRequisitionRow"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 2
+                      voucher_no: PRID00000001
+                      date: "2026-11-15"
+                      branch_id: 1
+                      branch:
+                        id: 1
+                        name: Dhaka
+                      department_id: 22
+                      department:
+                        id: 22
+                        name: Production
+                      total_qty: "1.000000"
+                      note: null
+                      requisition_status: Approved
+                      purchases_order_status: Pending
+                      can_edit: false
+                      can_delete: false
+                      created_at: "2026-11-15T09:20:11.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 1
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "422":
+          $ref: "#/components/responses/PurchasesListValidationError"
+
+  /purchases-requisitions/{id}:
+    get:
+      tags:
+        - Purchases Requisitions
+      summary: Get purchases requisition
+      description: |
+        One purchases requisition with its products (API version of the web page
+        `admin/inventory-transaction-purchases-requisition-show/{id}`). The data is the same as
+        the web page uses (`PurchasesRequsitionService::details()`): every requisition column,
+        `requisition_details` with each product, and `created_by` / `updated_by` / `approved_by`
+        as `{id, name}` (or `null`).
+
+        `branch_id` and `department_id` are IDs only (the web data does not include the names).
+
+        A requisition of a branch outside the user's branch access returns `404` (superadmin:
+        every branch).
+
+        Required permission: `module:purchases-manage.menu:purchases-requisition.permission:view`
+      operationId: getPurchasesRequisition
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/PurchasesRequisitionId"
+
+      responses:
+        "200":
+          description: Purchases requisition
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PurchasesRequisition"
+              example:
+                code: 200
+                success: true
+                message: Detail data
+                data:
+                  id: 2
+                  company_id: 1
+                  date: "2026-11-15"
+                  department_id: 22
+                  branch_id: 1
+                  voucher_no: PRID00000001
+                  documents: null
+                  total_qty: "1.000000"
+                  note: null
+                  requisition_status: Approved
+                  purchases_order_status: Pending
+                  deleted_by: null
+                  deleted_at: null
+                  created_at: "2026-11-15T09:20:11.000000Z"
+                  updated_at: "2026-11-15T09:21:40.000000Z"
+                  created_by:
+                    id: 2
+                    name: Admin
+                  updated_by: null
+                  approved_by:
+                    id: 2
+                    name: Admin
+                  requisition_details:
+                    - id: 3
+                      requisition_id: 2
+                      date: "2026-11-15"
+                      pack_size: "1.000000"
+                      pack_no: "1.000000"
+                      quantity: "1.000000"
+                      company_id: 1
+                      product_id: 2
+                      product:
+                        id: 2
+                        code: null
+                        name: Softener 4D
+                        category_id: 5
+                        status: Approved
+                        brand_id: 1
+                        company_id: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PurchasesRequisitionNotFound"
+
+    delete:
+      tags:
+        - Purchases Requisitions
+      summary: Delete purchases requisition
+      description: |
+        Deletes a purchases requisition and its product rows with the same code as the web
+        (`admin/inventory-transaction-purchases-requisition-delete/{id}`).
+
+        - Only while **both** `requisition_status` and `purchases_order_status` are `Pending`;
+          otherwise `409` and nothing is deleted. (The web code deletes only `Pending`
+          requisitions but reports success either way; the API says so instead.)
+        - A requisition of a branch outside the user's branch access returns `404`.
+        - The list's `can_delete` follows the same rule.
+
+        Required permission: `module:purchases-manage.menu:purchases-requisition.permission:delete`
+      operationId: deletePurchasesRequisition
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/PurchasesRequisitionId"
+
+      responses:
+        "200":
+          description: Purchases requisition deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 3
+              example:
+                code: 200
+                success: true
+                message: Purchases requisition deleted successfully.
+                data:
+                  id: 3
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PurchasesRequisitionNotFound"
+
+        "409":
+          $ref: "#/components/responses/PurchasesRequisitionNotPending"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "500":
+          $ref: "#/components/responses/PurchasesRequisitionDeleteFailed"
+
+  /purchases-orders:
+    get:
+      tags:
+        - Purchases Orders
+      summary: List purchases orders
+      description: |
+        Paginated list of purchases orders (API version of the web list
+        `admin/inventory-transaction-purchases-orders-list`).
+
+        - Only the logged-in user's company, dated on or after the **opening date**
+          (general setup `opening_date`) — same rows as the web list.
+        - **Branch limit:** only orders of the branches the user's roles have a branch access
+          permission for (`module:branch-access.menu:{branch}.permission:view`). Superadmin sees
+          every branch; a user with no branch permission gets an empty list.
+        - `can_edit`: the user has the edit permission and `order_status` is `Pending`
+          (web list edit button).
+        - `can_delete`: the user has the delete permission and `purchases_status` is `Pending`
+          (web list delete button).
+        - `requisition_id` is the requisition ID(s) the order was made from, comma-separated
+          (`null` when made without a requisition).
+
+        Required permission: `module:purchases-manage.menu:purchases-orders.permission:view`
+      operationId: listPurchasesOrders
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, voucher no, date, grand total, total qty, note, either status, supplier name or branch name.
+          schema:
+            type: string
+          example: POID
+        - name: branch_id
+          in: query
+          schema:
+            type: integer
+          example: 1
+        - name: supplier_id
+          in: query
+          schema:
+            type: integer
+          example: 1
+        - name: requisition_id
+          in: query
+          description: Orders whose `requisition_id` is exactly this value.
+          schema:
+            type: integer
+          example: 2
+        - name: order_status
+          in: query
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+        - name: purchases_status
+          in: query
+          description: "`Pending` = no purchase made from the order yet."
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+        - name: from_date
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2026-11-01"
+        - name: to_date
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2026-11-30"
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, date, voucher_no, subtotal, discount, grand_total, total_qty, order_status, purchases_status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+        - name: per_page
+          in: query
+          description: Rows per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+
+      responses:
+        "200":
+          description: Purchases orders
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/PurchasesOrderRow"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 1
+                      voucher_no: POID00000001
+                      date: "2026-11-15"
+                      branch_id: 1
+                      branch:
+                        id: 1
+                        name: Dhaka
+                      supplier_id: 1
+                      supplier:
+                        id: 1
+                        name: Global Chemicals (China) CO., LTD.
+                      requisition_id: "2"
+                      subtotal: null
+                      discount: "0.000000"
+                      grand_total: "0.000000"
+                      total_qty: "1.000000"
+                      note: null
+                      order_status: Approved
+                      purchases_status: Pending
+                      can_edit: false
+                      can_delete: true
+                      created_at: "2026-11-15T09:34:48.000000Z"
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 1
+                    last_page: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "422":
+          $ref: "#/components/responses/PurchasesListValidationError"
+
 components:
   securitySchemes:
     sessionCookie:
@@ -17779,6 +18253,17 @@ components:
         type: string
         enum: [general, purchases, sales, account, service, opening, pos, inventory_adjustment, coa_configuration, manufacturing]
       example: opening
+
+    PurchasesRequisitionId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Purchases requisition ID (the `id` of a list row). An unknown or non-numeric ID, or a
+        requisition of a branch outside the user's branch access, returns `404`.
+      schema:
+        type: integer
+      example: 2
 
   schemas:
     SuccessEnvelope:
@@ -21178,6 +21663,227 @@ components:
           additionalProperties:
             type: [string, "null"]
 
+    PurchasesRequisitionRow:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 2
+        voucher_no:
+          type: [string, "null"]
+          example: PRID00000001
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2026-11-15"
+        branch_id:
+          type: [integer, "null"]
+          example: 1
+        branch:
+          $ref: "#/components/schemas/NamedRef"
+        department_id:
+          type: [integer, "null"]
+          example: 22
+        department:
+          $ref: "#/components/schemas/NamedRef"
+        total_qty:
+          $ref: "#/components/schemas/Decimal"
+        note:
+          type: [string, "null"]
+          example: null
+        requisition_status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        purchases_order_status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          description: "`Approved` once a purchases order is made from it."
+          example: Pending
+        can_edit:
+          type: boolean
+          description: Edit permission and `requisition_status` is `Pending`.
+          example: false
+        can_delete:
+          type: boolean
+          description: Delete permission and both statuses are `Pending`.
+          example: false
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2026-11-15T09:20:11.000000Z"
+
+    PurchasesRequisition:
+      type: object
+      description: The web show page data (every requisition column plus the relations below).
+      properties:
+        id:
+          type: integer
+          example: 2
+        company_id:
+          type: integer
+          example: 1
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2026-11-15"
+        department_id:
+          type: [integer, "null"]
+          example: 22
+        branch_id:
+          type: [integer, "null"]
+          example: 1
+        voucher_no:
+          type: [string, "null"]
+          example: PRID00000001
+        documents:
+          type: [string, "null"]
+          example: null
+        total_qty:
+          $ref: "#/components/schemas/Decimal"
+        note:
+          type: [string, "null"]
+          example: null
+        requisition_status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        purchases_order_status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Pending
+        deleted_by:
+          type: [integer, "null"]
+          example: null
+        deleted_at:
+          type: [string, "null"]
+          example: null
+        created_at:
+          type: [string, "null"]
+          format: date-time
+        updated_at:
+          type: [string, "null"]
+          format: date-time
+        created_by:
+          $ref: "#/components/schemas/NamedRef"
+        updated_by:
+          $ref: "#/components/schemas/NamedRef"
+        approved_by:
+          $ref: "#/components/schemas/NamedRef"
+        requisition_details:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+                example: 3
+              requisition_id:
+                type: integer
+                example: 2
+              date:
+                type: [string, "null"]
+                format: date
+                example: "2026-11-15"
+              pack_size:
+                $ref: "#/components/schemas/Decimal"
+              pack_no:
+                $ref: "#/components/schemas/Decimal"
+              quantity:
+                $ref: "#/components/schemas/Decimal"
+              company_id:
+                type: integer
+                example: 1
+              product_id:
+                type: integer
+                example: 2
+              product:
+                type: [object, "null"]
+                properties:
+                  id:
+                    type: integer
+                    example: 2
+                  code:
+                    type: [string, "null"]
+                    example: null
+                  name:
+                    type: string
+                    example: Softener 4D
+                  category_id:
+                    type: [integer, "null"]
+                    example: 5
+                  status:
+                    type: [string, "null"]
+                    example: Approved
+                  brand_id:
+                    type: [integer, "null"]
+                    example: 1
+                  company_id:
+                    type: [integer, "null"]
+                    example: 1
+
+    PurchasesOrderRow:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        voucher_no:
+          type: [string, "null"]
+          example: POID00000001
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2026-11-15"
+        branch_id:
+          type: [integer, "null"]
+          example: 1
+        branch:
+          $ref: "#/components/schemas/NamedRef"
+        supplier_id:
+          type: [integer, "null"]
+          example: 1
+        supplier:
+          $ref: "#/components/schemas/NamedRef"
+        requisition_id:
+          type: [string, "null"]
+          description: Requisition ID(s) the order was made from, comma-separated.
+          example: "2"
+        subtotal:
+          oneOf:
+            - $ref: "#/components/schemas/Decimal"
+            - type: "null"
+        discount:
+          $ref: "#/components/schemas/Decimal"
+        grand_total:
+          $ref: "#/components/schemas/Decimal"
+        total_qty:
+          $ref: "#/components/schemas/Decimal"
+        note:
+          type: [string, "null"]
+          example: null
+        order_status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        purchases_status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          description: "`Approved` once a purchase is made from the order."
+          example: Pending
+        can_edit:
+          type: boolean
+          description: Edit permission and `order_status` is `Pending`.
+          example: false
+        can_delete:
+          type: boolean
+          description: Delete permission and `purchases_status` is `Pending`.
+          example: true
+        created_at:
+          type: [string, "null"]
+          format: date-time
+          example: "2026-11-15T09:34:48.000000Z"
+
   responses:
     SessionUnavailable:
       description: No session for this origin. The origin is missing from `SANCTUM_STATEFUL_DOMAINS`.
@@ -23483,3 +24189,55 @@ components:
             success: false
             message: Not Found
             errors: Data Not Found
+
+    PurchasesListValidationError:
+      description: A filter has a wrong value (dates must be `Y-m-d`; statuses must be one of the listed values).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          example:
+            code: 422
+            success: false
+            message: "Validation Failed. The from date does not match the format Y-m-d. "
+            errors:
+              from_date:
+                - The from date does not match the format Y-m-d.
+
+    PurchasesRequisitionNotFound:
+      description: No requisition with this ID, a non-numeric ID, or a requisition of a branch outside the user's branch access.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    PurchasesRequisitionNotPending:
+      description: The requisition status or the purchases order status is not `Pending`; nothing is deleted.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 409
+            success: false
+            message: Only pending requisitions can be deleted.
+            errors:
+              requisition_status: Approved
+              purchases_order_status: Pending
+
+    PurchasesRequisitionDeleteFailed:
+      description: Deleting failed in the existing web code; nothing is deleted. The error is written to the server log.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 500
+            success: false
+            message: Purchases requisition could not be deleted.
+            errors: Server Error
