@@ -173,6 +173,8 @@ tags:
     description: Purchases requisitions (Purchases Manage → Purchases Requisition)
   - name: Purchases Orders
     description: Purchases orders (Purchases Manage → Purchases Order)
+  - name: Purchases
+    description: Purchases (Purchases Manage → Purchases)
   - name: Stock
     description: Product stock (Stock Manage)
 
@@ -18643,6 +18645,718 @@ paths:
         "419":
           $ref: "#/components/responses/CsrfMismatch"
 
+  /purchases:
+    get:
+      tags:
+        - Purchases
+      summary: List purchases
+      description: |
+        Paginated list of purchases (API version of the web list
+        `admin/inventory-transaction-purchases-list`).
+
+        - Only the logged-in user's company, dated on or after the **opening date**
+          (general setup `opening_date`) — same rows as the web list.
+        - **Branch limit:** only purchases of the branches the user's roles have a branch access
+          permission for (`module:branch-access.menu:{branch}.permission:view`). Superadmin sees
+          every branch; a user with no branch permission gets an empty list.
+        - `can_edit`, `can_delete` and `can_show` come from the permissions only, with **no status
+          check** (the web list shows the Edit and Delete buttons for every purchase).
+        - `subtotal`, `discount`, `grand_total`, `total_qty`, `paid_amount` and `due_amount` are
+          formatted like the web list (general setup `price_decimal_point` and `thousand_separate`).
+          `due_amount` is `grand_total - paid_amount`, as on the web.
+        - `mrr_status` is in the row only when Purchases MRR is on (the web list shows the column
+          only then).
+        - `purchases_order` is `null` when the purchase has no order, or was made from several
+          orders (`purchases_order_id` then holds comma-separated IDs; the web shows nothing either).
+        - `date` is `Y-m-d` (the web list shows it in the general setup date format).
+
+        Required permission: `module:purchases-manage.menu:purchases.permission:view`
+      operationId: listPurchases
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: |
+            Partial match, same fields as the web list search: ID, purchases status, MRR status, date,
+            voucher no, voucher reference, payment type, cheque number, cheque date, subtotal, discount,
+            grand total, total qty, paid amount, due amount (the stored value), supplier name, branch
+            name, store name, bank name or purchases order voucher no.
+          schema:
+            type: string
+          example: PUID
+        - name: branch_id
+          in: query
+          schema:
+            type: integer
+          example: 1
+        - name: supplier_id
+          in: query
+          schema:
+            type: integer
+          example: 1
+        - name: purchases_status
+          in: query
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+        - name: payment_type
+          in: query
+          description: A payment type name (Pay Head Config), e.g. `Credit`, `Cash`, `Bank`.
+          schema:
+            type: string
+          example: Credit
+        - name: from_date
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2026-11-01"
+        - name: to_date
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2026-11-30"
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, date, voucher_no, subtotal, discount, grand_total, total_qty, paid_amount, due_amount, purchases_status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+        - name: per_page
+          in: query
+          description: Rows per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+
+      responses:
+        "200":
+          description: Purchases
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/PurchasesRow"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 438
+                      voucher_no: PUID00000438
+                      date: "2026-11-02"
+                      supplier:
+                        id: 4
+                        name: Arik Corporation
+                      branch:
+                        id: 1
+                        name: Dhaka
+                      voucher_reference: null
+                      payment_type: Credit
+                      bank: null
+                      cheque_number: null
+                      cheque_date: null
+                      purchases_order: null
+                      subtotal: "4,105.0000"
+                      discount: "0.0000"
+                      grand_total: "4,105.0000"
+                      total_qty: "3,200.0000"
+                      paid_amount: "0.0000"
+                      due_amount: "4,105.0000"
+                      purchases_status: Approved
+                      can_edit: true
+                      can_delete: true
+                      can_show: true
+                      mrr_status: Approved
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 440
+                    last_page: 44
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "422":
+          $ref: "#/components/responses/PurchasesListValidationError"
+
+    post:
+      tags:
+        - Purchases
+      summary: Create purchase
+      description: |
+        Creates a purchase (API version of the web form
+        `admin/inventory-transaction-purchases-create`, saved by
+        `admin/inventory-transaction-purchases-store`). Works like the web form:
+
+        - Required: `date`, `voucher_no`, `supplier_id`, `payment_type` (only checked as present, as
+          on the web). `voucher_no` is **not** used: the voucher no is generated (general setup
+          `purchases_prefix`). `date` is saved as `Y-m-d` (the web's `mysql_date()`), so send `Y-m-d`.
+        - `branch_id` is optional (default branch when not sent); when sent it must be one of the
+          user's branch access branches (superadmin: any branch), otherwise `422`.
+        - `purchases_order_id` and `account_id` must be **arrays** (as the web form sends them),
+          otherwise `422`.
+        - `purchases_order_id`: purchases orders the purchase is made from. Each must still have
+          `purchases_status` `Pending` (an unknown ID counts as used), otherwise `409` and nothing is
+          saved. After saving, those orders get `purchases_status` `Approved`.
+        - `payment_type` is a payment type name (Pay Head Config): `Credit` (no payment), `Cash`
+          (`paid_amount`), `Bank` (`bank_id`, `cheque_number`, `cheque_date`, `paid_amount`) or any
+          other type (`account_id[0]` is the account head, `paid_amount`).
+        - Product rows (`product_id[]`, `pack_size[]`, `pack_no[]`, `quantity[]`, `unit_price[]`,
+          `total_price[]`; with VAT & SD on also `supplementary_duty_percentage[]`,
+          `supplementary_duty[]`, `vat_percentage[]`, `total_vat[]`), the totals and `documents` are
+          **not** validated, as on the web. Send one value per product in the same order. A missing
+          `pack_size` is saved as the row's `quantity`, a missing `pack_no` as `1`.
+        - The browser checks of the web form are **not** done: a request without product rows
+          fails (`500`, without the envelope), and a `Cash` or `Bank` purchase with no
+          `paid_amount` is saved.
+        - `subtotal` = `sub_total`, `grand_total` and `discount` as sent, `total_qty` = sum of
+          `quantity`. `paid_amount` / `due_amount` come from the supplier's advance balance.
+        - Status starts as `Pending`. With **auto approval** (general setup `inventory_approval` =
+          `Auto Approval`) the payment, journal, MRR and stock are made at once and the status is
+          `Approved`. A `Bank` purchase that is not auto-approved keeps the cheque as a temporary
+          pending cheque.
+        - `documents` is an image file (send the request as `multipart/form-data` to include it).
+        - If saving fails nothing is saved and the API returns `500`.
+
+        Required permission: `module:purchases-manage.menu:purchases.permission:create`
+      operationId: createPurchase
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurchasesInput"
+            example:
+              date: "2026-11-16"
+              voucher_no: PUID00000446
+              supplier_id: 1
+              payment_type: Credit
+              branch_id: 1
+              product_id: [1]
+              pack_size: [1]
+              pack_no: [2]
+              quantity: [2]
+              unit_price: [50]
+              total_price: [100]
+              sub_total: 100
+              discount: 0
+              grand_total: 100
+          multipart/form-data:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/PurchasesInput"
+                - type: object
+                  properties:
+                    documents:
+                      type: string
+                      format: binary
+                      description: An image file.
+
+      responses:
+        "201":
+          description: Purchase created. `data` is the saved purchase (`PurchasesService::details()`).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Purchases"
+              example:
+                code: 201
+                success: true
+                message: Purchases created successfully.
+                data:
+                  id: 446
+                  company_id: 1
+                  date: "2026-11-16"
+                  supplier_id: 1
+                  branch_id: 1
+                  store_id: 1
+                  purchases_order_id: null
+                  voucher_no: PUID00000446
+                  payment_type: Credit
+                  account_id: null
+                  bank_id: null
+                  cheque_number: null
+                  cheque_date: null
+                  documents: null
+                  voucher_reference: null
+                  subtotal: "100.000000"
+                  total_qty: "2.000000"
+                  discount: "0.000000"
+                  grand_total: "100.000000"
+                  paid_amount: "0.000000"
+                  due_amount: "100.000000"
+                  mrr_status: Pending
+                  purchases_status: Approved
+                  created_by:
+                    id: 2
+                    name: Admin
+                  updated_by: null
+                  approved_by:
+                    id: 2
+                    name: Admin
+                  purchases_details:
+                    - id: 806
+                      purchases_id: 446
+                      branch_id: 1
+                      date: "2026-11-16"
+                      pack_size: "1.000000"
+                      pack_no: "2.000000"
+                      quantity: "2.000000"
+                      approved_quantity: null
+                      unit_price: "50.000000"
+                      total_price: "100.000000"
+                      company_id: 1
+                      product_id: 1
+                      product:
+                        id: 1
+                        code: null
+                        name: Silicone Softener WM-80
+                        category_id: 1
+                        status: Approved
+                        brand_id: 1
+                        company_id: 1
+                  general:
+                    id: 42157
+                    form_id: 4
+                    debit: "100.000000"
+                    status: Approved
+                    journals:
+                      - id: 118200
+                        account_id: 9
+                        debit: "100.000000"
+                        credit: null
+                        memo: Inventory Stock
+                        account:
+                          id: 9
+                          account_code: AC00000113
+                          name: a7
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "409":
+          $ref: "#/components/responses/PurchasesOrderNotPending"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/PurchasesValidationError"
+
+        "500":
+          $ref: "#/components/responses/PurchasesSaveFailed"
+
+  /purchases/{id}:
+    get:
+      tags:
+        - Purchases
+      summary: Get purchase
+      description: |
+        One purchase (API version of the web page `admin/inventory-transaction-purchases-show/{id}`;
+        also the data for the edit form `admin/inventory-transaction-purchases-edit/{id}`).
+
+        `data` holds what the web controller gives the page, from the same calls:
+
+        - `purchase`: `PurchasesService::details()` — every purchase column, `purchases_details`
+          with each product, `general` with its `journals` and each journal's `account`, and
+          `created_by` / `updated_by` / `approved_by` as `{id, name}` (or `null`).
+        - `active_columns`: which product row columns the page shows (the details form setup).
+        - `company_info`: the company record (page footer: address, phone, email, logo).
+        - `settings`: `mrr_active` (Purchases MRR on: received quantity and MRR status shown) and
+          `vat_sd_enabled` (VAT & SD columns shown).
+
+        `purchase` also carries what the web show page works out, with the same helpers:
+
+        - `supplier`: the page header supplier details.
+        - `date_formatted` (general setup date format).
+        - Each `purchases_details` row: `unit_price_formatted`, `total_price_formatted`; with VAT
+          & SD on also `total_exc_vat` (`total_price - (supplementary_duty + total_vat)`),
+          `supplementary_duty_formatted`, `total_vat_formatted`.
+        - `discount_formatted` (`null` when there is no discount — the page shows the row only then),
+          `total_amount` (`grand_total`) and `total_amount_in_word` (sum of the rows'
+          `quantity × unit_price` in words).
+        - Each journal row: `debit_formatted`, `credit_formatted`; plus `journal_total_debit`,
+          `journal_total_credit` and `has_journal` (the page's "Journal Details" button).
+        - `documents_url`: relative URL of the uploaded document (the "Document" button).
+        - `can_approve`: approve permission and `purchases_status` is `Pending` (the
+          "Approved ?" button).
+        - `mrr_status` is left out when Purchases MRR is off (the page shows it only then).
+
+        Statuses are plain values (the page shows them as badges). A purchase of a branch outside
+        the user's branch access returns `404` (superadmin: every branch).
+
+        Required permission: `module:purchases-manage.menu:purchases.permission:view`
+      operationId: getPurchase
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/PurchasesId"
+
+      responses:
+        "200":
+          description: Purchase
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PurchasesShow"
+              example:
+                code: 200
+                success: true
+                message: Detail data
+                data:
+                  purchase:
+                    id: 438
+                    company_id: 1
+                    date: "2026-11-02"
+                    form_id: 4
+                    supplier_id: 4
+                    branch_id: 1
+                    store_id: 1
+                    purchases_order_id: null
+                    voucher_no: PUID00000438
+                    payment_type: Credit
+                    account_id: null
+                    bank_id: null
+                    cheque_number: null
+                    cheque_date: null
+                    documents: null
+                    voucher_reference: null
+                    subtotal: "4105.000000"
+                    total_qty: "3200.000000"
+                    discount: null
+                    total_supplementary_duty: null
+                    total_vat: null
+                    grand_total: "4105.000000"
+                    cost_of_goods: "4105.000000"
+                    note: null
+                    paid_amount: "0.000000"
+                    due_amount: "4105.000000"
+                    mrr_status: Approved
+                    purchases_status: Approved
+                    created_by:
+                      id: 3
+                      name: Arna Roy
+                    updated_by: null
+                    approved_by:
+                      id: 3
+                      name: Arna Roy
+                    created_at: "2026-11-03T10:32:10.000000Z"
+                    updated_at: "2026-11-03T10:32:41.000000Z"
+                    date_formatted: "2026-11-02"
+                    discount_formatted: null
+                    total_amount: "4,105.0000"
+                    total_amount_in_word: Four Thousand One Hundred And Five Only
+                    journal_total_debit: "4,105.0000"
+                    journal_total_credit: "4,105.0000"
+                    has_journal: true
+                    documents_url: ""
+                    can_approve: false
+                    purchases_details:
+                      - id: 801
+                        purchases_id: 438
+                        branch_id: 1
+                        date: "2026-11-02"
+                        pack_size: "50.000000"
+                        pack_no: "54.000000"
+                        quantity: "2700.000000"
+                        approved_quantity: "2700.000000"
+                        unit_price: "1.300000"
+                        total_price: "3510.000000"
+                        company_id: 1
+                        product_id: 77
+                        unit_price_formatted: "1.3000"
+                        total_price_formatted: "3,510.0000"
+                        product:
+                          id: 77
+                          code: null
+                          name: Apriton Bond
+                          category_id: 1
+                          status: Approved
+                          brand_id: 4
+                          company_id: 1
+                    general:
+                      id: 42061
+                      date: "2026-11-02"
+                      voucher_id: 1176
+                      form_id: 4
+                      debit: "4105.000000"
+                      status: Approved
+                      journals:
+                        - id: 118073
+                          general_id: 42061
+                          account_id: 9
+                          date: "2026-11-02"
+                          debit: "4105.000000"
+                          credit: null
+                          memo: Inventory Stock
+                          debit_formatted: "4,105.0000"
+                          credit_formatted: "0.0000"
+                          account:
+                            id: 9
+                            account_code: AC00000113
+                            name: a7
+                    supplier:
+                      id: 4
+                      name: Arik Corporation
+                      address: null
+                      phone: null
+                      email: null
+                      tax_identification_number: null
+                      contact_person: null
+                  active_columns: [product_id, pack_size, pack_no, quantity, unit_price, total_price]
+                  company_info:
+                    id: 1
+                    company_id: 1
+                    name: Demo Accounts ERP
+                    phone: "+8801778835183"
+                    website: https://www.demo.com
+                    invoice_logo: public/uploads/invoice/8511792563861.png
+                  settings:
+                    mrr_active: true
+                    vat_sd_enabled: false
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PurchasesNotFound"
+
+    put:
+      tags:
+        - Purchases
+      summary: Update purchase
+      description: |
+        Updates a purchase (API version of `admin/inventory-transaction-purchases-update/{id}`;
+        the edit form data comes from `GET /purchases/{id}`). Same fields and rules as create, and
+        works like the web:
+
+        - **No status check**: any purchase can be updated (as on the web), including approved ones.
+          There is no pending purchases order check either.
+        - `voucher_no` is required and **is** saved as sent (send the current one to keep it).
+        - The previous payments, pending cheques, journal, stock rows and MRR details are removed
+          first (the MRR quantity is taken off the stock summary). Then the purchase is written again:
+          product rows replaced, totals as sent, status `Pending` — or, with auto approval, payment,
+          journal, MRR and stock made again and status `Approved`. The sent purchases orders get
+          `purchases_status` `Approved`.
+        - `documents` is replaced only when a new image is sent. PHP does not read files on a real
+          `PUT`, so to send `documents` use `POST /purchases/{id}` with `_method=PUT` as
+          `multipart/form-data`.
+        - **The result is not checked, as on the web:** the response is always "Data Updated"
+          (HTTP 200, `code: 204`). When the update fails nothing is changed but the same response is
+          returned — for example when part of the purchased stock was already sold, so the MRR
+          quantity cannot be taken off the stock summary ("Insufficient stock"). Read the purchase
+          again with `GET /purchases/{id}` to confirm the change.
+
+        Required permission: `module:purchases-manage.menu:purchases.permission:edit`
+      operationId: updatePurchase
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/PurchasesId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurchasesInput"
+            example:
+              date: "2026-11-02"
+              voucher_no: PUID00000439
+              supplier_id: 1
+              payment_type: Credit
+              branch_id: 1
+              product_id: [2]
+              pack_size: [1]
+              pack_no: [3]
+              quantity: [3]
+              unit_price: [10]
+              total_price: [30]
+              sub_total: 30
+              discount: 0
+              grand_total: 30
+          multipart/form-data:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/PurchasesInput"
+                - type: object
+                  properties:
+                    documents:
+                      type: string
+                      format: binary
+                      description: An image file (send with `POST` and `_method=PUT`).
+
+      responses:
+        "200":
+          description: "Always the web's \"Data Updated\" body (`code: 204`), whether the update went through or failed."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+              example:
+                code: 204
+                success: true
+                message: Data Updated
+                data: Updata Successfully
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PurchasesNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/PurchasesValidationError"
+
+    delete:
+      tags:
+        - Purchases
+      summary: Delete purchase
+      description: |
+        Deletes a purchase with the same code as the web
+        (`admin/inventory-transaction-purchases-delete/{id}`). Works like the web, so
+        **every response is HTTP 200** — read the body's `code`:
+
+        - `code: 204` "Data Deleted": the request went through. **No status check**: approved
+          purchases are deleted too. In one transaction the payments, pending cheques, journal
+          (general and ledger), stock rows and MRR details are removed (the MRR quantity is taken off
+          the stock summary), then the temporary cheque, the purchase and its product rows.
+          Everything is soft-deleted except the stock summary change.
+        - **The result is not checked, as on the web:** when deleting fails nothing is deleted but
+          the response is still "Data Deleted" — for example when part of the purchased stock was
+          already sold ("Insufficient stock"). Check with `GET /purchases/{id}` (`404` once deleted).
+        - `code: 203` "Invalid ID": the ID is not numeric.
+        - `code: 404` "Not Found": no purchase with this ID, or a purchase of a branch outside the
+          user's branch access.
+        - As on the web, the MRR record itself is kept and the purchases orders are **not** set back
+          to `Pending`.
+
+        Required permission: `module:purchases-manage.menu:purchases.permission:delete`
+      operationId: deletePurchase
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - name: id
+          in: path
+          required: true
+          description: Purchases ID. A non-numeric ID returns the "Invalid ID" body (HTTP 200).
+          schema:
+            type: integer
+          example: 438
+
+      responses:
+        "200":
+          description: "All results come with HTTP 200 (as on the web): deleted or failed (`code: 204`), invalid ID (`code: 203`), not found (`code: 404`)."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                deleted:
+                  summary: Deleted (or deleting failed - nothing deleted)
+                  value:
+                    code: 204
+                    success: true
+                    message: Data Deleted
+                    data: Deleted Successfully
+                invalidId:
+                  summary: Non-numeric ID
+                  value:
+                    code: 203
+                    success: false
+                    message: Invalid ID
+                    errors: abc
+                notFound:
+                  summary: Not found or outside the user's branch access
+                  value:
+                    code: 404
+                    success: false
+                    message: Not Found
+                    errors: Data Not Found
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
   /stock-info:
     get:
       tags:
@@ -19238,6 +19952,17 @@ components:
       schema:
         type: integer
       example: 1
+
+    PurchasesId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Purchases ID (the `id` of a list row). An unknown or non-numeric ID, or a purchase of a
+        branch outside the user's branch access, returns `404`.
+      schema:
+        type: integer
+      example: 438
 
   schemas:
     SuccessEnvelope:
@@ -23222,6 +23947,436 @@ components:
           format: date-time
           example: "2026-11-15T09:34:48.000000Z"
 
+    PurchasesRow:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 438
+        voucher_no:
+          type: [string, "null"]
+          example: PUID00000438
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2026-11-02"
+        supplier:
+          $ref: "#/components/schemas/NamedRef"
+        branch:
+          $ref: "#/components/schemas/NamedRef"
+        voucher_reference:
+          type: [string, "null"]
+          example: null
+        payment_type:
+          type: [string, "null"]
+          description: Payment type name (Pay Head Config).
+          example: Credit
+        bank:
+          description: The bank account (chart of account) for a `Bank` payment.
+          oneOf:
+            - $ref: "#/components/schemas/NamedRef"
+            - type: "null"
+        cheque_number:
+          type: [string, "null"]
+          example: null
+        cheque_date:
+          type: [string, "null"]
+          example: null
+        purchases_order:
+          type: [object, "null"]
+          description: The purchases order the purchase was made from; `null` when none or several.
+          properties:
+            id:
+              type: integer
+              example: 1
+            voucher_no:
+              type: string
+              example: POID00000001
+        subtotal:
+          type: string
+          description: Formatted like the web list.
+          example: "4,105.0000"
+        discount:
+          type: string
+          description: Formatted like the web list.
+          example: "0.0000"
+        grand_total:
+          type: string
+          description: Formatted like the web list.
+          example: "4,105.0000"
+        total_qty:
+          type: string
+          description: Formatted like the web list.
+          example: "3,200.0000"
+        paid_amount:
+          type: string
+          description: Formatted like the web list.
+          example: "0.0000"
+        due_amount:
+          type: string
+          description: "`grand_total - paid_amount`, formatted like the web list."
+          example: "4,105.0000"
+        purchases_status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        mrr_status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          description: Only when Purchases MRR is on.
+          example: Approved
+        can_edit:
+          type: boolean
+          description: Edit permission (no status check, as on the web).
+          example: true
+        can_delete:
+          type: boolean
+          description: Delete permission (no status check, as on the web).
+          example: true
+        can_show:
+          type: boolean
+          description: View permission.
+          example: true
+
+    PurchasesInput:
+      type: object
+      description: |
+        Create / update body (same rules as the web form). Only `date`, `voucher_no`, `supplier_id`
+        and `payment_type` are checked (as present), `branch_id` against the user's branch access,
+        and `purchases_order_id` / `account_id` as arrays; everything else is not validated, as on the
+        web. Send one value per product in the same order.
+      required: [date, voucher_no, supplier_id, payment_type]
+      properties:
+        date:
+          type: string
+          format: date
+          description: Saved as `Y-m-d`.
+          example: "2026-11-16"
+        voucher_no:
+          type: string
+          description: Create ignores it (the voucher no is generated); update saves it.
+          example: PUID00000438
+        supplier_id:
+          type: integer
+          example: 1
+        voucher_reference:
+          type: [string, "null"]
+          example: INV-778
+        payment_type:
+          type: string
+          description: A payment type name (Pay Head Config), e.g. `Credit`, `Cash`, `Bank`.
+          example: Credit
+        purchases_order_id:
+          type: array
+          description: Purchases orders the purchase is made from (create - each must still have `purchases_status` `Pending`).
+          items:
+            type: integer
+          example: [1]
+        branch_id:
+          type: [integer, "null"]
+          description: Optional; default branch when not sent. Must be one of the user's branch access branches.
+          example: 1
+        bank_id:
+          type: [integer, "null"]
+          description: "`Bank` payment: bank account (chart of account under Bank)."
+          example: null
+        cheque_number:
+          type: [string, "null"]
+          description: "`Bank` payment."
+          example: null
+        cheque_date:
+          type: [string, "null"]
+          description: "`Bank` payment."
+          example: null
+        account_id:
+          type: array
+          description: Payment types other than `Credit`, `Cash` and `Bank`; the first value is the account head.
+          items:
+            type: integer
+          example: [12]
+        paid_amount:
+          type: [number, "null"]
+          description: Payment for `Cash`, `Bank` and other paid types.
+          example: null
+        product_id:
+          type: array
+          items:
+            type: integer
+          example: [1]
+        pack_size:
+          type: array
+          description: Missing values are saved as the row's `quantity`.
+          items:
+            type: [number, "null"]
+          example: [1]
+        pack_no:
+          type: array
+          description: Missing values are saved as `1`.
+          items:
+            type: [number, "null"]
+          example: [2]
+        quantity:
+          type: array
+          description: "`total_qty` is their sum."
+          items:
+            type: number
+          example: [2]
+        unit_price:
+          type: array
+          items:
+            type: number
+          example: [50]
+        total_price:
+          type: array
+          items:
+            type: number
+          example: [100]
+        supplementary_duty_percentage:
+          type: array
+          description: VAT & SD on only.
+          items:
+            type: number
+        supplementary_duty:
+          type: array
+          description: VAT & SD on only.
+          items:
+            type: number
+        vat_percentage:
+          type: array
+          description: VAT & SD on only.
+          items:
+            type: number
+        total_vat:
+          type: array
+          description: VAT & SD on only.
+          items:
+            type: number
+        sub_total:
+          type: [number, "null"]
+          description: Saved as `subtotal`.
+          example: 100
+        discount:
+          type: [number, "null"]
+          example: 0
+        grand_total:
+          type: [number, "null"]
+          description: Saved as sent.
+          example: 100
+        total_supplementary_duty:
+          type: [number, "null"]
+          description: VAT & SD on only.
+        grand_total_vat:
+          type: [number, "null"]
+          description: VAT & SD on only. Saved as `total_vat`.
+
+    Purchases:
+      type: object
+      description: |
+        A purchase as `PurchasesService::details()` returns it: every purchase column, `purchases_details`
+        with each product, `general` with its `journals` (each with `account`), and
+        `created_by` / `updated_by` / `approved_by` as `{id, name}` (or `null`). Amounts are the
+        stored decimal strings.
+      additionalProperties: true
+      properties:
+        id:
+          type: integer
+          example: 438
+        company_id:
+          type: integer
+          example: 1
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2026-11-02"
+        supplier_id:
+          type: [integer, "null"]
+          example: 4
+        branch_id:
+          type: [integer, "null"]
+          example: 1
+        store_id:
+          type: [integer, "null"]
+          example: 1
+        purchases_order_id:
+          type: [string, "null"]
+          description: Purchases order ID(s), comma-separated.
+          example: null
+        voucher_no:
+          type: [string, "null"]
+          example: PUID00000438
+        payment_type:
+          type: [string, "null"]
+          example: Credit
+        account_id:
+          type: [integer, "null"]
+        bank_id:
+          type: [integer, "null"]
+        cheque_number:
+          type: [string, "null"]
+        cheque_date:
+          type: [string, "null"]
+        documents:
+          type: [string, "null"]
+          description: Uploaded image path.
+        voucher_reference:
+          type: [string, "null"]
+        subtotal:
+          $ref: "#/components/schemas/Decimal"
+        total_qty:
+          $ref: "#/components/schemas/Decimal"
+        discount:
+          oneOf:
+            - $ref: "#/components/schemas/Decimal"
+            - type: "null"
+        total_supplementary_duty:
+          oneOf:
+            - $ref: "#/components/schemas/Decimal"
+            - type: "null"
+        total_vat:
+          oneOf:
+            - $ref: "#/components/schemas/Decimal"
+            - type: "null"
+        grand_total:
+          $ref: "#/components/schemas/Decimal"
+        paid_amount:
+          $ref: "#/components/schemas/Decimal"
+        due_amount:
+          $ref: "#/components/schemas/Decimal"
+        mrr_status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          description: Left out by `GET /purchases/{id}` when Purchases MRR is off.
+        purchases_status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+        created_by:
+          $ref: "#/components/schemas/NamedRef"
+        updated_by:
+          $ref: "#/components/schemas/NamedRef"
+        approved_by:
+          $ref: "#/components/schemas/NamedRef"
+        purchases_details:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              id:
+                type: integer
+              purchases_id:
+                type: integer
+              product_id:
+                type: integer
+              pack_size:
+                $ref: "#/components/schemas/Decimal"
+              pack_no:
+                $ref: "#/components/schemas/Decimal"
+              quantity:
+                $ref: "#/components/schemas/Decimal"
+              approved_quantity:
+                description: Received quantity (MRR); `null` until received.
+              unit_price:
+                $ref: "#/components/schemas/Decimal"
+              total_price:
+                $ref: "#/components/schemas/Decimal"
+              product:
+                type: [object, "null"]
+                additionalProperties: true
+        general:
+          type: [object, "null"]
+          description: The purchase journal voucher; `null` when the purchase is not approved yet.
+          additionalProperties: true
+          properties:
+            journals:
+              type: array
+              items:
+                type: object
+                additionalProperties: true
+                properties:
+                  account_id:
+                    type: integer
+                  debit:
+                    description: Stored decimal string or `null`.
+                  credit:
+                    description: Stored decimal string or `null`.
+                  memo:
+                    type: [string, "null"]
+                  account:
+                    type: [object, "null"]
+                    additionalProperties: true
+
+    PurchasesShow:
+      type: object
+      description: "`GET /purchases/{id}` data: what the web controller gives the show page."
+      properties:
+        purchase:
+          allOf:
+            - $ref: "#/components/schemas/Purchases"
+            - type: object
+              properties:
+                supplier:
+                  type: [object, "null"]
+                  description: The supplier details of the page header.
+                  properties:
+                    id:
+                      type: integer
+                    name:
+                      type: string
+                    address:
+                      type: [string, "null"]
+                    phone:
+                      type: [string, "null"]
+                    email:
+                      type: [string, "null"]
+                    tax_identification_number:
+                      type: [string, "null"]
+                    contact_person:
+                      type: [string, "null"]
+                date_formatted:
+                  type: string
+                  description: "`date` in the general setup date format."
+                discount_formatted:
+                  type: [string, "null"]
+                  description: "`discount` formatted; `null` when there is no discount."
+                total_amount:
+                  type: string
+                  description: "`grand_total` formatted."
+                total_amount_in_word:
+                  type: string
+                  description: Sum of the rows' `quantity × unit_price` in words.
+                journal_total_debit:
+                  type: string
+                journal_total_credit:
+                  type: string
+                has_journal:
+                  type: boolean
+                  description: The page's "Journal Details" button.
+                documents_url:
+                  type: string
+                  description: Relative URL of `documents` (`imageUrl()`); empty when there is none.
+                can_approve:
+                  type: boolean
+                  description: Approve permission and `purchases_status` is `Pending`.
+        active_columns:
+          type: array
+          description: Product row columns the page shows (details form setup).
+          items:
+            type: string
+          example: [product_id, pack_size, pack_no, quantity, unit_price, total_price]
+        company_info:
+          type: object
+          description: The company record (page footer).
+          additionalProperties: true
+        settings:
+          type: object
+          properties:
+            mrr_active:
+              type: boolean
+              description: Purchases MRR on (received quantity and MRR status shown).
+            vat_sd_enabled:
+              type: boolean
+              description: VAT & SD on (VAT and SD row values shown).
+
   responses:
     SessionUnavailable:
       description: No session for this origin. The origin is missing from `SANCTUM_STATEFUL_DOMAINS`.
@@ -25656,4 +26811,59 @@ components:
             code: 500
             success: false
             message: Purchases order could not be saved.
+            errors: "SQLSTATE[...]"
+
+    PurchasesNotFound:
+      description: No purchase with this ID, a non-numeric ID, or a purchase of a branch outside the user's branch access.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    PurchasesOrderNotPending:
+      description: A sent purchases order does not have `purchases_status` `Pending` (a purchase was already made from it, or the ID does not exist); nothing is saved.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 409
+            success: false
+            message: A sent purchases order is not pending any more.
+            errors: null
+
+    PurchasesValidationError:
+      description: "`date`, `voucher_no`, `supplier_id` or `payment_type` is missing, `branch_id` is not a branch or is outside the user's branch access, or `purchases_order_id` / `account_id` is not an array."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          example:
+            code: 422
+            success: false
+            message: "Validation Failed. The payment type field is required. The account id must be an array. "
+            errors:
+              payment_type:
+                - The payment type field is required.
+              account_id:
+                - The account id must be an array.
+
+    PurchasesSaveFailed:
+      description: |
+        Saving failed in the existing web code (for example wrong product rows or a non-image
+        `documents`); nothing is saved. `errors` is the error message. When `quantity` is not sent at
+        all the server error comes without the envelope (Laravel's own error body, as on the web).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 500
+            success: false
+            message: Purchases could not be saved.
             errors: "SQLSTATE[...]"
