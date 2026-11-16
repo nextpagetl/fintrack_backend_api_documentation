@@ -173,6 +173,8 @@ tags:
     description: Purchases requisitions (Purchases Manage → Purchases Requisition)
   - name: Purchases Orders
     description: Purchases orders (Purchases Manage → Purchases Order)
+  - name: Stock
+    description: Product stock (Stock Manage)
 
 paths:
   /csrf-token:
@@ -17487,6 +17489,125 @@ paths:
         "422":
           $ref: "#/components/responses/PurchasesListValidationError"
 
+    post:
+      tags:
+        - Purchases Requisitions
+      summary: Create purchases requisition
+      description: |
+        Creates a purchases requisition (API version of the web form
+        `admin/inventory-transaction-purchases-requisition-create`, saved by
+        `admin/inventory-transaction-purchases-requisition-store`). Works like the web form:
+
+        - Required: `date`, `voucher_no`, `department_id` (only checked as present, as on the
+          web). `date` is saved as `Y-m-d` (the web's `mysql_date()`), so send `Y-m-d`.
+        - `branch_id` is optional (default branch when not sent); when sent it must be one of the
+          user's branch access branches (superadmin: any branch), otherwise `422`.
+        - Product rows (`product_id[]`, `quantity[]`, `pack_size[]`, `pack_no[]`) are **not**
+          validated, as on the web. Send one value per product in the same order. A missing
+          `pack_size` is saved as the row's `quantity`, a missing `pack_no` as `1`, a missing
+          `quantity` as `0`.
+        - `note` is **not** saved (always `null`), as the web form has no note input.
+        - `total_qty` = sum of `quantity`; `requisition_status` and `purchases_order_status`
+          start as `Pending`.
+        - If saving fails (for example missing or wrong product rows) nothing is saved and the
+          API returns `500`. When `quantity` is not sent at all the server error comes without
+          the envelope (as on the web).
+
+        Required permission: `module:purchases-manage.menu:purchases-requisition.permission:create`
+      operationId: createPurchasesRequisition
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurchasesRequisitionInput"
+            example:
+              date: "2026-11-16"
+              voucher_no: PRID00000002
+              department_id: 22
+              branch_id: 1
+              product_id: [2, 5]
+              quantity: [100, 40]
+              pack_size: [25, 20]
+              pack_no: [4, 2]
+
+      responses:
+        "201":
+          description: Purchases requisition created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PurchasesRequisition"
+              example:
+                code: 201
+                success: true
+                message: Purchases requisition created successfully.
+                data: &purchasesRequisitionSavedExample
+                  id: 3
+                  company_id: 1
+                  date: "2026-11-16"
+                  department_id: 22
+                  branch_id: 1
+                  voucher_no: PRID00000002
+                  documents: null
+                  total_qty: "140.000000"
+                  note: null
+                  requisition_status: Pending
+                  purchases_order_status: Pending
+                  deleted_by: null
+                  deleted_at: null
+                  created_at: "2026-11-16T05:02:10.000000Z"
+                  updated_at: "2026-11-16T05:02:10.000000Z"
+                  created_by:
+                    id: 2
+                    name: Admin
+                  updated_by: null
+                  approved_by: null
+                  requisition_details:
+                    - id: 7
+                      requisition_id: 3
+                      date: "2026-11-16"
+                      pack_size: "25.000000"
+                      pack_no: "4.000000"
+                      quantity: "100.000000"
+                      company_id: 1
+                      product_id: 2
+                      product:
+                        id: 2
+                        code: null
+                        name: Softener 4D
+                        category_id: 5
+                        status: Approved
+                        brand_id: 1
+                        company_id: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/PurchasesRequisitionValidationError"
+
+        "500":
+          $ref: "#/components/responses/PurchasesRequisitionSaveFailed"
+
   /purchases-requisitions/{id}:
     get:
       tags:
@@ -17500,6 +17621,11 @@ paths:
         as `{id, name}` (or `null`).
 
         `branch_id` and `department_id` are IDs only (the web data does not include the names).
+
+        Also the web show page's total row, formatted like the web (general setup
+        `price_decimal_point` and `thousand_separate`):
+        `total_quantity` (sum of the rows' `quantity`), `total_pack_size` (sum of `pack_size`) and
+        `total_pack_no` (always `0`, as on the web).
 
         A requisition of a branch outside the user's branch access returns `404` (superadmin:
         every branch).
@@ -17569,6 +17695,9 @@ paths:
                         status: Approved
                         brand_id: 1
                         company_id: 1
+                  total_quantity: "1.00"
+                  total_pack_size: "1.00"
+                  total_pack_no: "0.00"
 
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -17578,6 +17707,96 @@ paths:
 
         "404":
           $ref: "#/components/responses/PurchasesRequisitionNotFound"
+
+    put:
+      tags:
+        - Purchases Requisitions
+      summary: Update purchases requisition
+      description: |
+        Updates a purchases requisition (API version of
+        `admin/inventory-transaction-purchases-requisition-update/{id}`; the form data comes from
+        `GET /purchases-requisitions/{id}`). Same fields and rules as create, and works like the
+        web:
+
+        - **No status check**: any requisition can be updated (as on the web).
+        - `voucher_no` is required (send the current one to keep it).
+        - The product rows are replaced by the sent rows; `total_qty` is **not** recalculated
+          (as on the web).
+        - `purchases_order_status` goes back to `Pending`.
+        - `note` is set to `null` (the web edit form has no note input); `documents` is set to the
+          sent value, `null` when not sent.
+        - A requisition of a branch outside the user's branch access returns `404`.
+        - If saving fails (for example no `product_id` sent) nothing is changed and the API
+          returns `500`.
+
+        Required permission: `module:purchases-manage.menu:purchases-requisition.permission:edit`
+      operationId: updatePurchasesRequisition
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/PurchasesRequisitionId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurchasesRequisitionInput"
+            example:
+              date: "2026-11-16"
+              voucher_no: PRID00000002
+              department_id: 22
+              branch_id: 1
+              product_id: [2]
+              quantity: [120]
+
+      responses:
+        "200":
+          description: Purchases requisition updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PurchasesRequisition"
+              example:
+                code: 200
+                success: true
+                message: Purchases requisition updated successfully.
+                data: *purchasesRequisitionSavedExample
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PurchasesRequisitionNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/PurchasesRequisitionValidationError"
+
+        "500":
+          description: Saving failed in the existing web code; nothing is changed. `errors` is the error message.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 500
+                success: false
+                message: Purchases requisition could not be updated.
+                errors: "foreach() argument must be of type array|object, null given"
 
     delete:
       tags:
@@ -17644,6 +17863,80 @@ paths:
         "500":
           $ref: "#/components/responses/PurchasesRequisitionDeleteFailed"
 
+  /purchases-requisitions/{id}/requisition-status/{status}:
+    patch:
+      tags:
+        - Purchases Requisitions
+      summary: Change requisition status
+      description: |
+        Sets a requisition's `requisition_status` (API version of
+        `admin/inventory-transaction-purchases-requisition-approved/{requisition_id}/{status}`,
+        the web show page "Approved ?" button). No request body. Works like the web:
+
+        - `requisition_status` becomes `{status}` and `approved_by` the logged-in user.
+        - **No status check**: works whatever the current status is (as on the web).
+        - The response is the web's `Status Update` body (HTTP 200, `code: 204`, no record data).
+
+        Differences from the web: `{status}` must be `Approved`, `Inactive`, `Pending` or `Cancel`
+        (`422` otherwise), and a requisition of a branch outside the user's branch access returns
+        `404`.
+
+        Required permission: `module:purchases-manage.menu:purchases-requisition.permission:approve`
+      operationId: changePurchasesRequisitionStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/PurchasesRequisitionId"
+        - name: status
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+
+      responses:
+        "200":
+          description: Status changed (the body's `code` is `204`, as on the web).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+              example:
+                code: 204
+                success: true
+                message: Status Update
+                data: Updata Successfully
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PurchasesRequisitionNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: "`{status}` is not one of `Approved`, `Inactive`, `Pending`, `Cancel`."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
   /purchases-orders:
     get:
       tags:
@@ -17660,8 +17953,8 @@ paths:
           every branch; a user with no branch permission gets an empty list.
         - `can_edit`: the user has the edit permission and `order_status` is `Pending`
           (web list edit button).
-        - `can_delete`: the user has the delete permission and `purchases_status` is `Pending`
-          (web list delete button).
+        - `can_delete`: the user has the delete permission and **both** `order_status` and
+          `purchases_status` are `Pending` (the only case `DELETE` accepts).
         - `requisition_id` is the requisition ID(s) the order was made from, comma-separated
           (`null` when made without a requisition).
 
@@ -17790,7 +18083,7 @@ paths:
                       order_status: Approved
                       purchases_status: Pending
                       can_edit: false
-                      can_delete: true
+                      can_delete: false
                       created_at: "2026-11-15T09:34:48.000000Z"
                   pagination:
                     current_page: 1
@@ -17806,6 +18099,606 @@ paths:
 
         "422":
           $ref: "#/components/responses/PurchasesListValidationError"
+
+    post:
+      tags:
+        - Purchases Orders
+      summary: Create purchases order
+      description: |
+        Creates a purchases order (API version of the web form
+        `admin/inventory-transaction-purchases-orders-create`, saved by
+        `admin/inventory-transaction-purchases-orders-store`). Validation rules are written in the
+        API (not read from the web form settings); if validation fails nothing is saved.
+
+        - `voucher_no` is optional: when not sent, the next number is generated the same way the
+          web form fills it (general setup `purchases_order_prefix`).
+        - `branch_id` is optional (default branch when not sent); when sent it must be one of the
+          user's branch access branches (superadmin: any branch).
+        - Every row array (`quantity`, `unit_price`, `total_price`, and `pack_size` / `pack_no`
+          when sent) must have one value per `product_id`, in the same order. A missing
+          `pack_size` is saved as the row's `quantity`, a missing `pack_no` as `1`.
+        - `total_qty` = sum of `quantity`, `grand_total` = sum of `total_price`, `subtotal` =
+          `sub_total` as sent; `order_status` and `purchases_status` start as `Pending`.
+        - `requisition_id`: requisitions the order is made from. Each must exist and still have
+          `purchases_order_status` `Pending`, otherwise `409` and nothing is saved. After saving,
+          those requisitions get `purchases_order_status` `Approved`.
+        - `documents` is an image file (send the request as `multipart/form-data` to include it).
+        - If saving fails nothing is saved and the API returns `500`.
+
+        Required permission: `module:purchases-manage.menu:purchases-orders.permission:create`
+      operationId: createPurchasesOrder
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/PurchasesOrderInput"
+                - type: object
+                  properties:
+                    requisition_id:
+                      type: array
+                      description: Requisition IDs the order is made from (each must still have `purchases_order_status` `Pending`).
+                      items:
+                        type: integer
+                      example: [2]
+            example:
+              date: "2026-11-16"
+              supplier_id: 1
+              branch_id: 1
+              requisition_id: [2]
+              sub_total: 250
+              note: Urgent
+              product_id: [2]
+              quantity: [100]
+              unit_price: [2.5]
+              total_price: [250]
+              pack_size: [25]
+              pack_no: [4]
+          multipart/form-data:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/PurchasesOrderInput"
+                - type: object
+                  properties:
+                    requisition_id:
+                      type: array
+                      items:
+                        type: integer
+                    documents:
+                      type: string
+                      format: binary
+                      description: An image file.
+
+      responses:
+        "201":
+          description: Purchases order created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PurchasesOrder"
+              example:
+                code: 201
+                success: true
+                message: Purchases order created successfully.
+                data: &purchasesOrderExample
+                  id: 1
+                  company_id: 1
+                  date: "2026-11-16"
+                  supplier_id: 1
+                  branch_id: 1
+                  requisition_id: "2"
+                  voucher_no: POID00000001
+                  documents: null
+                  subtotal: 250
+                  total_qty: 100
+                  discount: 0
+                  grand_total: 250
+                  note: Urgent
+                  order_status: Pending
+                  purchases_status: Pending
+                  deleted_by: null
+                  deleted_at: null
+                  created_at: "2026-11-16T05:10:22.000000Z"
+                  updated_at: "2026-11-16T05:10:22.000000Z"
+                  created_by:
+                    id: 2
+                    name: Admin
+                  updated_by: null
+                  approved_by: null
+                  order_details:
+                    - id: 1
+                      order_id: 1
+                      date: "2026-11-16"
+                      pack_size: 25
+                      pack_no: 4
+                      quantity: 100
+                      unit_price: 2.5
+                      total_price: 250
+                      company_id: 1
+                      product_id: 2
+                      product:
+                        id: 2
+                        code: null
+                        name: Softener 4D
+                        category_id: 5
+                        status: Approved
+                        brand_id: 1
+                        company_id: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "409":
+          $ref: "#/components/responses/PurchasesOrderRequisitionUsed"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/PurchasesOrderValidationError"
+
+        "500":
+          $ref: "#/components/responses/PurchasesOrderSaveFailed"
+
+  /purchases-orders/{id}:
+    get:
+      tags:
+        - Purchases Orders
+      summary: Get purchases order
+      description: |
+        One purchases order with its products (API version of the web page
+        `admin/inventory-transaction-purchases-orders-show/{id}`; also the data for the edit form).
+        The data is the same as the web uses (`PurchasesOrderService::details()`): every order
+        column, `order_details` with each product, and `created_by` / `updated_by` / `approved_by`
+        as `{id, name}` (or `null`).
+
+        `branch_id` and `supplier_id` are IDs only (the web data does not include the names).
+
+        An order of a branch outside the user's branch access returns `404` (superadmin: every
+        branch).
+
+        Required permission: `module:purchases-manage.menu:purchases-orders.permission:view`
+      operationId: getPurchasesOrder
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/PurchasesOrderId"
+
+      responses:
+        "200":
+          description: Purchases order
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PurchasesOrder"
+              example:
+                code: 200
+                success: true
+                message: Detail data
+                data: *purchasesOrderExample
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PurchasesOrderNotFound"
+
+    put:
+      tags:
+        - Purchases Orders
+      summary: Update purchases order
+      description: |
+        Updates a purchases order (API version of
+        `admin/inventory-transaction-purchases-orders-update/{id}`; the form data comes from
+        `GET /purchases-orders/{id}`). Same fields and rules as create, except:
+
+        - Only while `order_status` is `Pending`; otherwise `409` and nothing is changed.
+        - `voucher_no` keeps the current number when not sent.
+        - `requisition_id` is **not** accepted (ignored when sent); the order's requisitions do
+          not change.
+        - The product rows are replaced by the sent rows, `grand_total` is recalculated and
+          `purchases_status` goes back to `Pending`. As on the web, `total_qty` is **not**
+          recalculated.
+        - `documents` is replaced only when a new image is sent.
+
+        Required permission: `module:purchases-manage.menu:purchases-orders.permission:edit`
+      operationId: updatePurchasesOrder
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/PurchasesOrderId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurchasesOrderInput"
+            example:
+              date: "2026-11-16"
+              supplier_id: 1
+              branch_id: 1
+              sub_total: 300
+              note: Urgent
+              product_id: [2]
+              quantity: [120]
+              unit_price: [2.5]
+              total_price: [300]
+          multipart/form-data:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/PurchasesOrderInput"
+                - type: object
+                  properties:
+                    documents:
+                      type: string
+                      format: binary
+                      description: An image file.
+
+      responses:
+        "200":
+          description: Purchases order updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PurchasesOrder"
+              example:
+                code: 200
+                success: true
+                message: Purchases order updated successfully.
+                data: *purchasesOrderExample
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PurchasesOrderNotFound"
+
+        "409":
+          description: The order status is not `Pending`; nothing is changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Only pending purchases orders can be updated.
+                errors:
+                  order_status: Approved
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/PurchasesOrderValidationError"
+
+        "500":
+          description: Saving failed in the existing web code; nothing is changed. `errors` is the error message.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 500
+                success: false
+                message: Purchases order could not be updated.
+                errors: "SQLSTATE[...]"
+
+    delete:
+      tags:
+        - Purchases Orders
+      summary: Delete purchases order
+      description: |
+        Deletes a purchases order and its product rows with the same code as the web
+        (`admin/inventory-transaction-purchases-orders-delete/{id}`).
+
+        - Only while **both** `order_status` and `purchases_status` are `Pending`; otherwise `409`
+          and nothing is deleted. (The web code deletes only `Pending` orders but reports success
+          either way; the API says so instead.)
+        - As on the web, the order's requisitions are **not** set back to `Pending`.
+        - An order of a branch outside the user's branch access returns `404`.
+        - The list's `can_delete` follows the same rule.
+
+        Required permission: `module:purchases-manage.menu:purchases-orders.permission:delete`
+      operationId: deletePurchasesOrder
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/PurchasesOrderId"
+
+      responses:
+        "200":
+          description: Purchases order deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            example: 1
+              example:
+                code: 200
+                success: true
+                message: Purchases order deleted successfully.
+                data:
+                  id: 1
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PurchasesOrderNotFound"
+
+        "409":
+          description: The order status or the purchases status is not `Pending`; nothing is deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Only pending purchases orders can be deleted.
+                errors:
+                  order_status: Approved
+                  purchases_status: Pending
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "500":
+          description: Deleting failed in the existing web code; nothing is deleted. The error is written to the server log.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 500
+                success: false
+                message: Purchases order could not be deleted.
+                errors: Server Error
+
+  /purchases-orders/{id}/approve:
+    patch:
+      tags:
+        - Purchases Orders
+      summary: Approve purchases order
+      description: |
+        Approves a purchases order (API version of the web show page "Approved ?" button,
+        `admin/inventory-transaction-purchases-orders-approved/{id}/Approved`). No request body.
+
+        - Always sets `order_status` to `Approved` and `approved_by` to the logged-in user.
+        - Only while `order_status` is `Pending`; otherwise `409` and nothing is changed.
+
+        Required permission: `module:purchases-manage.menu:purchases-orders.permission:approve`
+      operationId: approvePurchasesOrder
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/PurchasesOrderId"
+
+      responses:
+        "200":
+          description: Purchases order approved
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PurchasesOrder"
+              example:
+                code: 200
+                success: true
+                message: Purchases order approved successfully.
+                data: *purchasesOrderExample
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PurchasesOrderNotFound"
+
+        "409":
+          description: The order status is not `Pending`; nothing is changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 409
+                success: false
+                message: Only pending purchases orders can be approved.
+                errors:
+                  order_status: Approved
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /stock-info:
+    get:
+      tags:
+        - Stock
+      summary: Product stock info
+      description: |
+        Product stock (API version of `admin/inventory-setup-product-stock-info`, which the web
+        transaction forms call when a product is picked). Uses the same code as the web
+        (`ProductService::productStock()`) with the same query values.
+
+        - `branch_id` is **required** and must be one of the user's branch access branches
+          (superadmin: any branch); otherwise `422`. The other query values are not validated,
+          as on the web.
+        - When general setup **Purchases MRR** (`purchases_mrr`) is `Yes`: stock rows of the
+          branch (and `store_id` / `batch_no` when sent), quantity summed per product (and per
+          batch when `product_id` is sent). Without `zero_quantity=1` only rows with
+          `quantity > 0` are returned. `data` is a **list** (can be empty).
+        - When it is not `Yes`: only the first stock row of `product_id` with `quantity > 0`;
+          `branch_id`, `store_id` and `zero_quantity` are not used, and `data` is **one object**
+          (or the "not found" body when `product_id` is not sent or has no stock).
+        - Nothing found returns HTTP **200** with the "not found" body (`code: 404`), as on the web.
+
+        Required permission: `module:stock-manage.menu:stock.permission:view`
+      operationId: getStockInfo
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: branch_id
+          in: query
+          required: true
+          schema:
+            type: integer
+          example: 1
+        - name: product_id
+          in: query
+          schema:
+            type: integer
+          example: 2
+        - name: store_id
+          in: query
+          schema:
+            type: integer
+          example: 1
+        - name: batch_no
+          in: query
+          schema:
+            type: string
+        - name: zero_quantity
+          in: query
+          description: "`1` also returns rows with zero or negative stock; empty or `0` returns only `quantity > 0`."
+          schema:
+            type: integer
+            enum: [0, 1]
+          example: 0
+
+      responses:
+        "200":
+          description: "Stock rows, or the \"not found\" body (`code: 404`) when nothing is returned."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: "#/components/schemas/SuccessEnvelope"
+                      - type: object
+                        properties:
+                          data:
+                            oneOf:
+                              - type: array
+                                items:
+                                  $ref: "#/components/schemas/StockInfoRow"
+                              - $ref: "#/components/schemas/StockInfoRow"
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                found:
+                  summary: Stock found (Purchases MRR on)
+                  value:
+                    code: 200
+                    success: true
+                    message: List Data
+                    data:
+                      - id: 15
+                        product_id: 2
+                        quantity: "120.00"
+                        batch_no: null
+                        branch_id: 1
+                        store_id: 1
+                        pack_size: "25.00"
+                        pname: Softener 4D
+                        sprice: "2.500000"
+                        sd_rate: "0"
+                        vat_rate: "0"
+                        puprice: "1.900000"
+                        product:
+                          id: 2
+                          name: Softener 4D
+                        batch: null
+                notFound:
+                  summary: Nothing found
+                  value:
+                    code: 404
+                    success: false
+                    message: Not Found
+                    errors: Data Not Found
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "422":
+          description: "`branch_id` is missing, not a branch, or outside the user's branch access."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. You do not have access to this branch. "
+                errors:
+                  branch_id:
+                    - You do not have access to this branch.
 
 components:
   securitySchemes:
@@ -18264,6 +19157,17 @@ components:
       schema:
         type: integer
       example: 2
+
+    PurchasesOrderId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Purchases order ID (the `id` of a list row). An unknown or non-numeric ID, or an order of a
+        branch outside the user's branch access, returns `404`.
+      schema:
+        type: integer
+      example: 1
 
   schemas:
     SuccessEnvelope:
@@ -21821,6 +22725,322 @@ components:
                   company_id:
                     type: [integer, "null"]
                     example: 1
+        total_quantity:
+          type: string
+          description: "`GET /purchases-requisitions/{id}` only. Sum of the rows' `quantity`, formatted like the web (decimal places and thousand separator from general setup)."
+          example: "1,500.00"
+        total_pack_size:
+          type: string
+          description: "`GET /purchases-requisitions/{id}` only. Sum of the rows' `pack_size`, formatted like the web."
+          example: "300.00"
+        total_pack_no:
+          type: string
+          description: "`GET /purchases-requisitions/{id}` only. Always `0` (formatted), as on the web show page."
+          example: "0.00"
+
+    PurchasesRequisitionInput:
+      type: object
+      description: Create / update body. Product rows are not validated (as on the web); send one value per product in the same order.
+      required: [date, voucher_no, department_id]
+      properties:
+        date:
+          type: string
+          format: date
+          description: Required. Saved as `Y-m-d`.
+          example: "2026-11-16"
+        voucher_no:
+          type: string
+          example: PRID00000002
+        department_id:
+          type: integer
+          description: Required (only checked as present, as on the web).
+          example: 22
+        branch_id:
+          type: [integer, "null"]
+          description: Optional; default branch when not sent. Must be one of the user's branch access branches.
+          example: 1
+        product_id:
+          type: array
+          items:
+            type: integer
+          example: [2, 5]
+        quantity:
+          type: array
+          description: Missing values are saved as `0`.
+          items:
+            type: number
+          example: [100, 40]
+        pack_size:
+          type: array
+          description: Missing values are saved as the row's `quantity`.
+          items:
+            type: number
+          example: [25, 20]
+        pack_no:
+          type: array
+          description: Missing values are saved as `1`.
+          items:
+            type: number
+          example: [4, 2]
+        documents:
+          type: [string, "null"]
+          description: Update only. Saved as sent (`null` when not sent).
+          example: null
+
+    PurchasesOrder:
+      type: object
+      description: The web show page data (every order column plus the relations below).
+      properties:
+        id:
+          type: integer
+          example: 1
+        company_id:
+          type: integer
+          example: 1
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2026-11-16"
+        supplier_id:
+          type: [integer, "null"]
+          example: 1
+        branch_id:
+          type: [integer, "null"]
+          example: 1
+        requisition_id:
+          type: [string, "null"]
+          description: Requisition ID(s) the order was made from, comma-separated.
+          example: "2"
+        voucher_no:
+          type: [string, "null"]
+          example: POID00000001
+        documents:
+          type: [string, "null"]
+          description: Uploaded image path.
+          example: null
+        subtotal:
+          type: [number, "null"]
+          example: 250
+        total_qty:
+          type: [number, "null"]
+          example: 100
+        discount:
+          type: [number, "null"]
+          example: 0
+        grand_total:
+          type: [number, "null"]
+          example: 250
+        note:
+          type: [string, "null"]
+          example: Urgent
+        order_status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Pending
+        purchases_status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Pending
+        deleted_by:
+          type: [integer, "null"]
+          example: null
+        deleted_at:
+          type: [string, "null"]
+          example: null
+        created_at:
+          type: [string, "null"]
+          format: date-time
+        updated_at:
+          type: [string, "null"]
+          format: date-time
+        created_by:
+          $ref: "#/components/schemas/NamedRef"
+        updated_by:
+          $ref: "#/components/schemas/NamedRef"
+        approved_by:
+          $ref: "#/components/schemas/NamedRef"
+        order_details:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+                example: 1
+              order_id:
+                type: integer
+                example: 1
+              date:
+                type: [string, "null"]
+                format: date
+                example: "2026-11-16"
+              pack_size:
+                type: [number, "null"]
+                example: 25
+              pack_no:
+                type: [number, "null"]
+                example: 4
+              quantity:
+                type: [number, "null"]
+                example: 100
+              unit_price:
+                type: [number, "null"]
+                example: 2.5
+              total_price:
+                type: [number, "null"]
+                example: 250
+              company_id:
+                type: integer
+                example: 1
+              product_id:
+                type: integer
+                example: 2
+              product:
+                type: [object, "null"]
+                properties:
+                  id:
+                    type: integer
+                    example: 2
+                  code:
+                    type: [string, "null"]
+                    example: null
+                  name:
+                    type: string
+                    example: Softener 4D
+                  category_id:
+                    type: [integer, "null"]
+                    example: 5
+                  status:
+                    type: [string, "null"]
+                    example: Approved
+                  brand_id:
+                    type: [integer, "null"]
+                    example: 1
+                  company_id:
+                    type: [integer, "null"]
+                    example: 1
+
+    PurchasesOrderInput:
+      type: object
+      description: Create / update body. Every row array must have one value per `product_id`, in the same order.
+      required: [date, supplier_id, product_id, quantity, unit_price, total_price]
+      properties:
+        date:
+          type: string
+          format: date
+          description: "`Y-m-d`."
+          example: "2026-11-16"
+        voucher_no:
+          type: string
+          maxLength: 255
+          description: Optional. Create - generated when not sent; update - the current one is kept when not sent.
+          example: POID00000001
+        supplier_id:
+          type: integer
+          description: Must be an existing (not deleted) supplier.
+          example: 1
+        branch_id:
+          type: [integer, "null"]
+          description: Optional; default branch when not sent. Must be one of the user's branch access branches.
+          example: 1
+        sub_total:
+          type: [number, "null"]
+          description: Saved as `subtotal` as sent.
+          example: 250
+        note:
+          type: [string, "null"]
+          example: Urgent
+        product_id:
+          type: array
+          minItems: 1
+          description: Existing (not deleted) product IDs.
+          items:
+            type: integer
+          example: [2]
+        quantity:
+          type: array
+          description: One per product, each greater than 0.
+          items:
+            type: number
+          example: [100]
+        unit_price:
+          type: array
+          description: One per product, each 0 or more.
+          items:
+            type: number
+          example: [2.5]
+        total_price:
+          type: array
+          description: One per product, each 0 or more. `grand_total` is their sum.
+          items:
+            type: number
+          example: [250]
+        pack_size:
+          type: array
+          description: Optional; one per product when sent. Missing values are saved as the row's `quantity`.
+          items:
+            type: [number, "null"]
+          example: [25]
+        pack_no:
+          type: array
+          description: Optional; one per product when sent. Missing values are saved as `1`.
+          items:
+            type: [number, "null"]
+          example: [4]
+
+    StockInfoRow:
+      type: object
+      description: |
+        A stock summary row as the web returns it. `quantity` is the summed stock when Purchases
+        MRR is on. `product` and `batch` are the full related records.
+      additionalProperties: true
+      properties:
+        id:
+          type: integer
+          example: 15
+        product_id:
+          type: integer
+          example: 2
+        quantity:
+          $ref: "#/components/schemas/Decimal"
+        batch_no:
+          type: [string, integer, "null"]
+          example: null
+        branch_id:
+          type: [integer, "null"]
+          example: 1
+        store_id:
+          type: [integer, "null"]
+          example: 1
+        pack_size:
+          oneOf:
+            - $ref: "#/components/schemas/Decimal"
+            - type: "null"
+        presentStock:
+          description: Only when Purchases MRR is off. Same as `quantity`.
+        pname:
+          type: string
+          description: Product name.
+          example: Softener 4D
+        sprice:
+          description: Product sale price.
+        puprice:
+          description: Product purchases price.
+        avgpuprice:
+          description: Average purchases price; only when `product_id` is sent.
+        sd_rate:
+          description: Product SD rate, or the general setup default.
+        vat_rate:
+          description: Product VAT rate, or the general setup default.
+        bname:
+          type: string
+          description: "Batch name with stock, e.g. `B-01 - Stock - 120.00`; only when the row has a batch."
+        product:
+          type: [object, "null"]
+          additionalProperties: true
+        batch:
+          type: [object, "null"]
+          additionalProperties: true
 
     PurchasesOrderRow:
       type: object
@@ -21877,8 +23097,8 @@ components:
           example: false
         can_delete:
           type: boolean
-          description: Delete permission and `purchases_status` is `Pending`.
-          example: true
+          description: Delete permission and both statuses are `Pending`.
+          example: false
         created_at:
           type: [string, "null"]
           format: date-time
@@ -24241,3 +25461,81 @@ components:
             success: false
             message: Purchases requisition could not be deleted.
             errors: Server Error
+
+    PurchasesRequisitionValidationError:
+      description: "`date`, `voucher_no` or `department_id` is missing, or `branch_id` is not a branch or is outside the user's branch access."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          example:
+            code: 422
+            success: false
+            message: "Validation Failed. The department id field is required. You do not have access to this branch. "
+            errors:
+              department_id:
+                - The department id field is required.
+              branch_id:
+                - You do not have access to this branch.
+
+    PurchasesRequisitionSaveFailed:
+      description: Saving failed in the existing web code (for example missing or wrong product rows); nothing is saved. `errors` is the error message.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 500
+            success: false
+            message: Purchases requisition could not be saved.
+            errors: "foreach() argument must be of type array|object, null given"
+
+    PurchasesOrderNotFound:
+      description: No order with this ID, a non-numeric ID, or an order of a branch outside the user's branch access.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    PurchasesOrderRequisitionUsed:
+      description: A sent requisition no longer has `purchases_order_status` `Pending` (an order was already made from it); nothing is saved.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 409
+            success: false
+            message: A purchases order has already been made from a sent requisition.
+            errors: null
+
+    PurchasesOrderValidationError:
+      description: A field is missing or wrong (see `PurchasesOrderInput`), a row array does not have one value per product, or `branch_id` is outside the user's branch access.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          example:
+            code: 422
+            success: false
+            message: "Validation Failed. The supplier id field is required. "
+            errors:
+              supplier_id:
+                - The supplier id field is required.
+
+    PurchasesOrderSaveFailed:
+      description: Saving failed in the existing web code; nothing is saved. `errors` is the error message.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 500
+            success: false
+            message: Purchases order could not be saved.
+            errors: "SQLSTATE[...]"
