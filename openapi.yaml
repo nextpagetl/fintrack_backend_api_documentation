@@ -175,6 +175,8 @@ tags:
     description: Purchases orders (Purchases Manage → Purchases Order)
   - name: Purchases
     description: Purchases (Purchases Manage → Purchases)
+  - name: Purchases MRR
+    description: Purchases MRR — materials receiving receipts (Purchases Manage → Purchases MRR)
   - name: Stock
     description: Product stock (Stock Manage)
 
@@ -18128,7 +18130,15 @@ paths:
         - `requisition_id`: requisitions the order is made from. Each must still have
           `purchases_order_status` `Pending` (an unknown ID counts as used), otherwise `409` and
           nothing is saved. After saving, those requisitions get `purchases_order_status` `Approved`.
-        - `documents` is an image file (send the request as `multipart/form-data` to include it).
+        - `documents`, either:
+          - an image **file** (send the request as `multipart/form-data`) — saved as on the web, in
+            `public/uploads/purchasesRequisition/{order_id}/` (the web code's folder name); or
+          - a **path** from `POST /purchases-orders/documents` (two-step upload) — after the order is
+            saved the file is moved to `public/uploads/purchasesOrder/{order_id}/` and set as
+            `documents`, in the same transaction. The path must be the logged-in user's upload from
+            the last 24 hours, otherwise `422`.
+
+          `documents` is written only when the order is saved, as with the web form.
         - If saving fails (for example wrong product rows or a non-image file) nothing is saved and
           the API returns `500`. When `quantity` or `total_price` is not sent at all the server
           error comes without the envelope (as on the web).
@@ -18263,6 +18273,63 @@ paths:
 
         "500":
           $ref: "#/components/responses/PurchasesOrderSaveFailed"
+
+  /purchases-orders/documents:
+    post:
+      tags:
+        - Purchases Orders
+      summary: Upload purchases order document
+      description: |
+        Step 1 of the two-step document upload (like the product images). The image is saved with the
+        web's own `helper::upload()` (scaled to fit 500×500, as the web upload) in the logged-in user's
+        temporary folder `public/uploads/purchasesOrder/tmp/{user_id}/`, and its `path` is returned.
+        **Nothing is written to the database.**
+
+        Step 2: send the `path` in `documents` to `POST /purchases-orders` or `PUT /purchases-orders/{id}`.
+        The file is then moved to `public/uploads/purchasesOrder/{order_id}/` when the order is saved.
+        Temporary files never used are deleted after 24 hours (`uploads:clean-tmp`).
+
+        Sending the file itself in `documents` (one step, as on the web) still works.
+
+        Required permission: `module:purchases-manage.menu:purchases-orders.permission:create` or
+        `...permission:edit`
+      operationId: uploadPurchasesOrderDocument
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        $ref: "#/components/requestBodies/TmpDocumentUpload"
+
+      responses:
+        "201":
+          description: Uploaded to the temporary folder.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TmpDocumentUploaded"
+              example:
+                code: 201
+                success: true
+                message: Document uploaded successfully.
+                data:
+                  path: public/uploads/purchasesOrder/tmp/2/3381794824550.png
+                  url: /storage/uploads/purchasesOrder/tmp/2/3381794824550.png
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/DocumentUploadValidationError"
 
   /purchases-orders/{id}:
     get:
@@ -18406,7 +18473,12 @@ paths:
         - The product rows are replaced by the sent rows, `grand_total` is recalculated and
           `purchases_status` goes back to `Pending`. As on the web, `total_qty` is **not**
           recalculated.
-        - `documents` is replaced only when a new image is sent.
+        - `documents`: a file or an upload path, as in create; not sent — kept. To send a file use
+          `POST /purchases-orders/{id}` with `_method=PUT` as `multipart/form-data` (PHP does not read
+          files on a real `PUT`).
+        - **Difference from the web:** when a new document is saved, the previous document file is
+          deleted (only a file in the order's own folders `purchasesOrder/{id}/` or
+          `purchasesRequisition/{id}/`). The web keeps the old file.
         - If saving fails (for example wrong product rows) nothing is changed and the API returns
           `500`.
 
@@ -18514,6 +18586,9 @@ paths:
         - Empty body: deleting failed in the existing web code; nothing is deleted.
         - As on the web, the order's requisitions are **not** set back to `Pending`.
         - The list's `can_delete` still needs both `order_status` and `purchases_status` `Pending`.
+        - **Difference from the web:** when the order is really deleted (only a `Pending` one), its
+          document file is deleted too (only a file in the order's own folders). An order that is not
+          deleted keeps its file.
 
         Required permission: `module:purchases-manage.menu:purchases-orders.permission:delete`
       operationId: deletePurchasesOrder
@@ -18850,7 +18925,16 @@ paths:
           `Auto Approval`) the payment, journal, MRR and stock are made at once and the status is
           `Approved`. A `Bank` purchase that is not auto-approved keeps the cheque as a temporary
           pending cheque.
-        - `documents` is an image file (send the request as `multipart/form-data` to include it).
+        - `documents`, either:
+          - an image **file** (send the request as `multipart/form-data`) — saved as on the web; or
+          - a **path** from `POST /purchases/documents` (two-step upload) — after the purchase is saved
+            the file is moved into the purchase's folder and set as `documents`, in the same
+            transaction. The path must be the logged-in user's upload from the last 24 hours,
+            otherwise `422`.
+
+          Both end in the web's folder `public/uploads/purchases/{id}/`, and `documents` is written only
+          when the purchase is saved. An MRR made by auto approval in the same save gets the same
+          document path, as on the web.
         - If saving fails nothing is saved and the API returns `500`.
 
         Required permission: `module:purchases-manage.menu:purchases.permission:create`
@@ -18995,6 +19079,63 @@ paths:
 
         "500":
           $ref: "#/components/responses/PurchasesSaveFailed"
+
+  /purchases/documents:
+    post:
+      tags:
+        - Purchases
+      summary: Upload purchase document
+      description: |
+        Step 1 of the two-step document upload (like the product images). The image is saved with the
+        web's own `helper::upload()` (scaled to fit 500×500, as the web upload) in the logged-in user's
+        temporary folder `public/uploads/purchases/tmp/{user_id}/`, and its `path` is returned.
+        **Nothing is written to the database.**
+
+        Step 2: send the `path` in `documents` to `POST /purchases` or `PUT /purchases/{id}`. The file is
+        then moved to the web's folder `public/uploads/purchases/{purchase_id}/` when the purchase is
+        saved. Temporary files never used are deleted after 24 hours (`uploads:clean-tmp`).
+
+        Sending the file itself in `documents` (one step, as on the web) still works.
+
+        Required permission: `module:purchases-manage.menu:purchases.permission:create` or
+        `...permission:edit`
+      operationId: uploadPurchaseDocument
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        $ref: "#/components/requestBodies/TmpDocumentUpload"
+
+      responses:
+        "201":
+          description: Uploaded to the temporary folder.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TmpDocumentUploaded"
+              example:
+                code: 201
+                success: true
+                message: Document uploaded successfully.
+                data:
+                  path: public/uploads/purchases/tmp/2/7701794825078.png
+                  url: /storage/uploads/purchases/tmp/2/7701794825078.png
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/DocumentUploadValidationError"
 
   /purchases/{id}:
     get:
@@ -19198,9 +19339,13 @@ paths:
           product rows replaced, totals as sent, status `Pending` — or, with auto approval, payment,
           journal, MRR and stock made again and status `Approved`. The sent purchases orders get
           `purchases_status` `Approved`.
-        - `documents` is replaced only when a new image is sent. PHP does not read files on a real
-          `PUT`, so to send `documents` use `POST /purchases/{id}` with `_method=PUT` as
+        - `documents`: a file or an upload path, as in create; not sent — kept. PHP does not read files
+          on a real `PUT`, so to send a file use `POST /purchases/{id}` with `_method=PUT` as
           `multipart/form-data`.
+        - **Difference from the web:** when a new document is saved, the previous document file is
+          deleted — only a file in `public/uploads/purchases/{id}/` that **no MRR uses** (auto approval
+          copies the purchase's document path into its MRR). The web keeps the old file. Nothing is
+          deleted when the update fails.
         - **The result is not checked, as on the web:** the response is always "Data Updated"
           (HTTP 200, `code: 204`). When the update fails nothing is changed but the same response is
           returned — for example when part of the purchased stock was already sold, so the MRR
@@ -19299,6 +19444,9 @@ paths:
           user's branch access.
         - As on the web, the MRR record itself is kept and the purchases orders are **not** set back
           to `Pending`.
+        - **Difference from the web:** when the purchase is really deleted, its document file is deleted
+          too — only a file in `public/uploads/purchases/{id}/` that no MRR uses. Since the MRR record
+          is kept, the file of a purchase whose MRR copied the document stays.
 
         Required permission: `module:purchases-manage.menu:purchases.permission:delete`
       operationId: deletePurchase
@@ -19328,6 +19476,767 @@ paths:
               examples:
                 deleted:
                   summary: Deleted (or deleting failed - nothing deleted)
+                  value:
+                    code: 204
+                    success: true
+                    message: Data Deleted
+                    data: Deleted Successfully
+                invalidId:
+                  summary: Non-numeric ID
+                  value:
+                    code: 203
+                    success: false
+                    message: Invalid ID
+                    errors: abc
+                notFound:
+                  summary: Not found or outside the user's branch access
+                  value:
+                    code: 404
+                    success: false
+                    message: Not Found
+                    errors: Data Not Found
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /purchases/{id}/purchases-status/{status}:
+    patch:
+      tags:
+        - Purchases
+      summary: Approve or cancel purchase
+      description: |
+        Approves or cancels a purchase (API version of
+        `admin/inventory-transaction-purchases-account-approved/{id}/{status}`, the web show page
+        "Approved ?" button — shown when `purchases_status` is `Pending`; see `can_approve` in
+        `GET /purchases/{id}`). Uses the web's own `accountApproved()`, and works like the web:
+
+        - A `Pending` purchase set to `Approved`, in one transaction: debit payment, general and
+          journal; MRR, stock and stock summary when Purchases MRR is off or auto-approved (the MRR gets
+          the purchase's document path); the payment by payment type (cash, bank with a pending cheque,
+          or other) and its journal; then `purchases_status` `Approved` and `approved_by`. The journal is
+          dated `date_picker`.
+        - Any other case only sets `purchases_status` and `approved_by` — for example cancelling an
+          approved purchase does **not** reverse its payment, journal or stock.
+        - **No Pending check** (the web shows the button only for `Pending` purchases; the server does
+          not check).
+        - **The result is not checked, as on the web:** the response is always "Status Update"
+          (HTTP 200, `code: 204`), also when approving fails. Read the purchase with
+          `GET /purchases/{id}` to confirm.
+        - As on the web, approving a `Credit` purchase also makes an extra zero-amount "Credit" payment
+          and zero-amount journal lines (one without an account).
+
+        Only needed when general setup `inventory_approval` is `Pending Approval`; with `Auto Approval`
+        purchases are approved when saved.
+
+        The web popup's rules are checked here: `{status}` must be `Approved` or `Cancel`, and
+        `date_picker` is required for `Approved` (`422` otherwise). A purchase of a branch outside the
+        user's branch access returns `404`.
+
+        Required permission: `module:purchases-manage.menu:purchases.permission:approve`
+      operationId: changePurchaseStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/PurchasesId"
+        - name: status
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [Approved, Cancel]
+          example: Approved
+
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                date_picker:
+                  type: string
+                  format: date
+                  description: Approval date (the journal date). Required for `Approved`; the web popup fills in today.
+            example:
+              date_picker: "2026-11-16"
+
+      responses:
+        "200":
+          description: "Always the web's \"Status Update\" body (`code: 204`), whether approving went through or failed."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+              example:
+                code: 204
+                success: true
+                message: Status Update
+                data: Updata Successfully
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PurchasesNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: "`{status}` is not `Approved` or `Cancel`, or `date_picker` is missing (for `Approved`) or not `Y-m-d`."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The date picker field is required when status is Approved. "
+                errors:
+                  date_picker:
+                    - The date picker field is required when status is Approved.
+
+  /purchases-mrrs:
+    get:
+      tags:
+        - Purchases MRR
+      summary: List purchases MRRs
+      description: |
+        Paginated list of purchases MRRs (materials receiving receipts; API version of the web list
+        `admin/inventory-transaction-purchases-mrr-list`).
+
+        - Only the logged-in user's company, dated on or after the **opening date** — same rows as the
+          web list.
+        - **Branch limit:** only MRRs of the branches the user's roles have a branch access permission
+          for. Superadmin sees every branch.
+        - `can_edit`, `can_delete` and `can_show` come from the permissions only, with no status check
+          (as the web list buttons).
+        - `total_qty` is formatted like the web list. `date` is `Y-m-d`; `status` is the plain value.
+
+        Required permission: `module:purchases-manage.menu:purchases-mrr.permission:view`
+      operationId: listPurchasesMrrs
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: "Partial match, same fields as the web list search: ID, status, date, voucher no, total qty, note, branch name, purchase voucher no or store name."
+          schema:
+            type: string
+          example: PMID
+        - name: branch_id
+          in: query
+          schema:
+            type: integer
+          example: 1
+        - name: store_id
+          in: query
+          schema:
+            type: integer
+          example: 1
+        - name: purchases_id
+          in: query
+          schema:
+            type: integer
+          example: 438
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [Approved, Pending, Inactive, Cancel]
+        - name: from_date
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2026-11-01"
+        - name: to_date
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2026-11-30"
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, date, voucher_no, total_qty, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+        - name: per_page
+          in: query
+          description: Rows per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+
+      responses:
+        "200":
+          description: Purchases MRRs
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/PurchasesMrrRow"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 490
+                      voucher_no: PMID00000490
+                      date: "2026-11-02"
+                      branch:
+                        id: 1
+                        name: Dhaka
+                      store:
+                        id: 1
+                        name: Karamtola
+                      purchases:
+                        id: 438
+                        voucher_no: PUID00000438
+                      total_qty: "3,200.0000"
+                      note: null
+                      status: Approved
+                      can_edit: true
+                      can_delete: true
+                      can_show: true
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 487
+                    last_page: 49
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "422":
+          $ref: "#/components/responses/PurchasesListValidationError"
+
+    post:
+      tags:
+        - Purchases MRR
+      summary: Create purchases MRR
+      description: |
+        Records goods received for a purchase (API version of the web form
+        `admin/inventory-transaction-purchases-mrr-create`, saved by
+        `admin/inventory-transaction-purchases-mrr-store`). Works like the web form:
+
+        - Required: `date`, `voucher_no`, `purchases_id` (only checked as present, as on the web).
+          `voucher_no` **is** saved as sent. `branch_id` / `store_id` are optional (defaults when not
+          sent); `branch_id` must be one of the user's branch access branches, otherwise `422`.
+        - The product rows are **not** validated, as on the web server. Send one value per product in the
+          same order; a row is saved only when it has an `approved_quantity`. Take the rows from
+          `GET /purchases/{id}` (remaining = `quantity - approved_quantity`; the web form lists only rows
+          with at least 1 remaining).
+        - In one transaction: the MRR is saved with status `Approved` (whatever the MRR approval setting),
+          a batch is made for a new `batch_no`, the purchase rows' received quantity and the purchase's
+          `mrr_status` (`Approved` or `Partial Received`) are updated, stock rows are made at the purchase
+          unit price, and the stock summary is raised for rows with a `pack_size`.
+        - The web form's browser checks are **not** done: a received quantity above the remaining
+          quantity, an empty batch or empty pack values are saved; a request without rows fails (`500`,
+          without the envelope). The web dropdown lists only approved purchases still waiting for MRR; the
+          API takes any `purchases_id`. As in the web code, an MRR for a purchase that is **not approved
+          yet** is saved (MRR rows, received quantity, purchase `mrr_status`, stock summary) but **no stock
+          rows** are made, since those need the purchase's journal — send only approved purchases.
+        - `documents`: an image **file** (`multipart/form-data`, saved as on the web), or a **path** from
+          `POST /purchases-mrrs/documents` (moved to the MRR's folder when the MRR is saved). Both end in
+          `public/uploads/purchasesMrr/{mrr_id}/`; `documents` is written only when the MRR is saved.
+
+        Required permission: `module:purchases-manage.menu:purchases-mrr.permission:create`
+      operationId: createPurchasesMrr
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurchasesMrrInput"
+            example:
+              date: "2026-11-16"
+              voucher_no: PMID00000492
+              purchases_id: 445
+              branch_id: 1
+              store_id: 1
+              note: Received in full
+              product_id: [1]
+              batch_no: [B-2026-11]
+              pack_size: [1]
+              pack_no: [1]
+              quantity: [1]
+              remaining_quantity: [1]
+              approved_quantity: [1]
+          multipart/form-data:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/PurchasesMrrInput"
+                - type: object
+                  properties:
+                    documents:
+                      type: string
+                      format: binary
+                      description: An image file.
+
+      responses:
+        "201":
+          description: MRR created. `data` is the saved MRR (`PurchasesMrrService::details()`).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PurchasesMrr"
+              example:
+                code: 201
+                success: true
+                message: Purchases MRR created successfully.
+                data:
+                  id: 492
+                  company_id: 1
+                  date: "2026-11-16"
+                  purchases_id: 445
+                  branch_id: 1
+                  store_id: 1
+                  voucher_no: PMID00000492
+                  total_qty: "1.000000"
+                  documents: null
+                  note: Received in full
+                  status: Approved
+                  purchases_mrr_details:
+                    - id: 1025
+                      mrr_id: 492
+                      purchases_id: 445
+                      product_id: 1
+                      store_id: 1
+                      batch_no: 887
+                      date: "2026-11-16"
+                      pack_size: "1.000000"
+                      pack_no: "1.000000"
+                      quantity: "1.000000"
+                      approved_quantity: "1.000000"
+                      company_id: 1
+                      product:
+                        id: 1
+                        name: Silicone Softener WM-80
+                      batch:
+                        id: 887
+                        name: B-2026-11
+                  branch:
+                    id: 1
+                    name: Dhaka
+                  store:
+                    id: 1
+                    name: Karamtola
+                  purchases:
+                    id: 445
+                    voucher_no: PUID00000442
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/PurchasesMrrValidationError"
+
+        "500":
+          $ref: "#/components/responses/PurchasesMrrSaveFailed"
+
+  /purchases-mrrs/documents:
+    post:
+      tags:
+        - Purchases MRR
+      summary: Upload MRR document
+      description: |
+        Step 1 of the two-step document upload (like the product images). The image is saved with the
+        web's own `helper::upload()` (scaled to fit 500×500, as the web MRR upload) in the logged-in
+        user's temporary folder `public/uploads/purchasesMrr/tmp/{user_id}/`, and its `path` is returned.
+        **Nothing is written to the database.**
+
+        Step 2: send the `path` in `documents` to `POST /purchases-mrrs` or `PUT /purchases-mrrs/{id}`.
+        The file is then moved to the web's folder `public/uploads/purchasesMrr/{mrr_id}/` when the MRR is
+        saved. Temporary files never used are deleted after 24 hours (`uploads:clean-tmp`).
+
+        Sending the file itself in `documents` (one step, as on the web) still works.
+
+        Required permission: `module:purchases-manage.menu:purchases-mrr.permission:create` or
+        `...permission:edit`
+      operationId: uploadPurchasesMrrDocument
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        $ref: "#/components/requestBodies/TmpDocumentUpload"
+
+      responses:
+        "201":
+          description: Uploaded to the temporary folder.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TmpDocumentUploaded"
+              example:
+                code: 201
+                success: true
+                message: Document uploaded successfully.
+                data:
+                  path: public/uploads/purchasesMrr/tmp/2/8511794822067.png
+                  url: /storage/uploads/purchasesMrr/tmp/2/8511794822067.png
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/DocumentUploadValidationError"
+
+  /purchases-mrrs/{id}:
+    get:
+      tags:
+        - Purchases MRR
+      summary: Get purchases MRR
+      description: |
+        One MRR (API version of the web page `admin/inventory-transaction-purchases-mrr-show/{id}`; also
+        the data for the edit form `admin/inventory-transaction-purchases-mrr-edit/{id}`).
+
+        `data` holds what the web controller gives the page, from the same calls:
+
+        - `mrr`: `PurchasesMrrService::details()` — every MRR column, `purchases_mrr_details` with each
+          product and batch, `purchases_details` (the purchase rows: ordered and received quantity, unit
+          price), `branch`, `store`, and `purchases` with its `supplier`.
+        - `active_columns`: the MRR details form columns; the page shows Batch No, Pack Size and Pack No.
+          only when listed (Item and Received Quantity always).
+        - `company_info`: the company record (page footer).
+
+        `mrr` also carries what the web show page works out, with the same helpers:
+        `date_formatted`, `created_by` / `approved_by` as `{id, name}` (footer; empty on existing MRRs,
+        which never stored them), on each `purchases_mrr_details` row `pack_size_formatted`,
+        `pack_no_formatted` and `approved_quantity_formatted`, the Sub-Total `total_pack_size`,
+        `total_pack_no` and `total_received_quantity`, and `documents_url` (the "Document" button).
+
+        As on the web there is no edit flag (the page's Edit link checks a field the MRR does not have);
+        the list's `can_edit` covers it. An MRR of a branch outside the user's branch access returns `404`.
+
+        Required permission: `module:purchases-manage.menu:purchases-mrr.permission:view`
+      operationId: getPurchasesMrr
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/PurchasesMrrId"
+
+      responses:
+        "200":
+          description: Purchases MRR
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PurchasesMrrShow"
+              example:
+                code: 200
+                success: true
+                message: Detail data
+                data:
+                  mrr:
+                    id: 490
+                    company_id: 1
+                    date: "2026-11-02"
+                    purchases_id: 438
+                    branch_id: 1
+                    store_id: 1
+                    voucher_no: PMID00000490
+                    total_qty: "3200.000000"
+                    documents: null
+                    note: null
+                    status: Approved
+                    created_by: null
+                    approved_by: null
+                    date_formatted: "2026-11-02"
+                    total_pack_size: "100.0000"
+                    total_pack_no: "64.0000"
+                    total_received_quantity: "3,200.0000"
+                    documents_url: ""
+                    purchases_mrr_details:
+                      - id: 1023
+                        mrr_id: 490
+                        purchases_id: 438
+                        product_id: 77
+                        batch_no: 885
+                        pack_size: "50.000000"
+                        pack_no: "54.000000"
+                        quantity: "2700.000000"
+                        approved_quantity: "2700.000000"
+                        pack_size_formatted: "50.0000"
+                        pack_no_formatted: "54.0000"
+                        approved_quantity_formatted: "2,700.0000"
+                        product:
+                          id: 77
+                          name: Apriton Bond
+                        batch:
+                          id: 885
+                          name: "260156"
+                    branch:
+                      id: 1
+                      name: Dhaka
+                    store:
+                      id: 1
+                      name: Karamtola
+                    purchases:
+                      id: 438
+                      voucher_no: PUID00000438
+                      date: "2026-11-02"
+                      supplier:
+                        id: 4
+                        name: Arik Corporation
+                  active_columns: [product_id, batch_no, pack_size, pack_no, quantity, remaining_quantity, approved_quantity]
+                  company_info:
+                    id: 1
+                    name: Demo Accounts ERP
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PurchasesMrrNotFound"
+
+    put:
+      tags:
+        - Purchases MRR
+      summary: Update purchases MRR
+      description: |
+        Updates an MRR (API version of `admin/inventory-transaction-purchases-mrr-update/{id}`; the edit
+        form data comes from `GET /purchases-mrrs/{id}`). Same fields and rules as create, and works like
+        the web:
+
+        - **No status check.** `voucher_no` is saved as sent.
+        - In one transaction the old rows are undone first (their received quantity is taken off the
+          purchase rows and the stock summary, their stock rows removed), then the new rows, received
+          quantities, purchase `mrr_status`, stock and stock summary are written.
+        - When the update fails nothing is changed and the API returns `500` (the web shows the error
+          too) — for example when part of the received stock was already sold ("Insufficient stock").
+        - As on the web server, the browser form rules are not checked, and `purchases_id` may be another
+          purchase (the web edit form offers only the MRR's own purchase).
+        - `documents`: a file or an upload path, as in create; not sent — kept. To send a file use
+          `POST /purchases-mrrs/{id}` with `_method=PUT` as `multipart/form-data`.
+        - **Difference from the web:** when a new document is saved, the previous document file is
+          deleted (only a file in `public/uploads/purchasesMrr/{id}/` — an MRR made by purchase auto
+          approval may hold the purchase's document path, which is left alone). The web keeps it.
+
+        An MRR of a branch outside the user's branch access returns `404`.
+
+        Required permission: `module:purchases-manage.menu:purchases-mrr.permission:edit`
+      operationId: updatePurchasesMrr
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/PurchasesMrrId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurchasesMrrInput"
+            example:
+              date: "2026-10-27"
+              voucher_no: PMID00000488
+              purchases_id: 436
+              branch_id: 1
+              store_id: 1
+              note: Part received
+              product_id: [195]
+              batch_no: ["261027"]
+              pack_size: [50]
+              pack_no: [6]
+              quantity: [500]
+              remaining_quantity: [0]
+              approved_quantity: [300]
+          multipart/form-data:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/PurchasesMrrInput"
+                - type: object
+                  properties:
+                    documents:
+                      type: string
+                      format: binary
+                      description: An image file (send with `POST` and `_method=PUT`).
+
+      responses:
+        "200":
+          description: MRR updated. `data` is the saved MRR (`PurchasesMrrService::details()`).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PurchasesMrr"
+              example:
+                code: 200
+                success: true
+                message: Purchases MRR updated successfully.
+                data:
+                  id: 488
+                  voucher_no: PMID00000488
+                  total_qty: "300.000000"
+                  note: Part received
+                  status: Approved
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PurchasesMrrNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/PurchasesMrrValidationError"
+
+        "500":
+          description: Updating failed in the existing web code; nothing is changed. `errors` is the error message.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 500
+                success: false
+                message: Purchases MRR could not be updated.
+                errors: "Insufficient stock for Apriton Bond (Batch: 260156). Available: 487.75, Required: 2700"
+
+    delete:
+      tags:
+        - Purchases MRR
+      summary: Delete purchases MRR
+      description: |
+        Deletes an MRR with the same code as the web (`admin/inventory-transaction-purchases-mrr-delete/{id}`).
+        Works like the web, so **every response is HTTP 200** — read the body's `code`:
+
+        - `code: 204` "Data Deleted": deleted. **No status check.** In one transaction each row's received
+          quantity is taken off the purchase row (and the purchase's `mrr_status` is worked out again when
+          that reaches zero — as on the web it may become `Partial Received`, not `Pending`), the MRR's
+          stock rows are removed and the quantity is taken off the stock summary; then the MRR and its rows
+          are soft-deleted.
+        - **Empty body:** deleting failed in the existing web code; nothing is deleted — for example when
+          part of the received stock was already sold ("Insufficient stock").
+        - `code: 203` "Invalid ID": the ID is not numeric.
+        - `code: 404` "Not Found": no MRR with this ID, or an MRR of a branch outside the user's branch
+          access.
+        - **Difference from the web:** after a delete, the MRR's document file is deleted too (only a file
+          in `public/uploads/purchasesMrr/{id}/`). The web keeps it.
+
+        Required permission: `module:purchases-manage.menu:purchases-mrr.permission:delete`
+      operationId: deletePurchasesMrr
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - name: id
+          in: path
+          required: true
+          description: MRR ID. A non-numeric ID returns the "Invalid ID" body (HTTP 200).
+          schema:
+            type: integer
+          example: 488
+
+      responses:
+        "200":
+          description: "All results come with HTTP 200 (as on the web): deleted (`code: 204`), invalid ID (`code: 203`), not found (`code: 404`), or an empty body when deleting failed."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                deleted:
+                  summary: Deleted
                   value:
                     code: 204
                     success: true
@@ -19963,6 +20872,32 @@ components:
       schema:
         type: integer
       example: 438
+
+    PurchasesMrrId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Purchases MRR ID (the `id` of a list row). An unknown or non-numeric ID, or an MRR of a branch
+        outside the user's branch access, returns `404`.
+      schema:
+        type: integer
+      example: 490
+
+  requestBodies:
+    TmpDocumentUpload:
+      required: true
+      description: The document image for the two-step upload.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [document]
+            properties:
+              document:
+                type: string
+                format: binary
+                description: An image file (jpg, jpeg, png or webp, max 5 MB).
 
   schemas:
     SuccessEnvelope:
@@ -23826,6 +24761,10 @@ components:
           items:
             type: [number, "null"]
           example: [4]
+        documents:
+          type: [string, "null"]
+          description: "A path from `POST /purchases-orders/documents` (two-step upload). To send the file itself, use `multipart/form-data`."
+          example: public/uploads/purchasesOrder/tmp/2/3381794824550.png
 
     StockInfoRow:
       type: object
@@ -24168,6 +25107,10 @@ components:
         grand_total_vat:
           type: [number, "null"]
           description: VAT & SD on only. Saved as `total_vat`.
+        documents:
+          type: [string, "null"]
+          description: "A path from `POST /purchases/documents` (two-step upload). To send the file itself, use `multipart/form-data`."
+          example: public/uploads/purchases/tmp/2/7701794825078.png
 
     Purchases:
       type: object
@@ -24376,6 +25319,278 @@ components:
             vat_sd_enabled:
               type: boolean
               description: VAT & SD on (VAT and SD row values shown).
+
+    TmpDocumentUploaded:
+      description: A document uploaded to the user's temporary folder (step 1 of the two-step upload).
+      allOf:
+        - $ref: "#/components/schemas/SuccessEnvelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: Send this in `documents` when saving the record (within 24 hours).
+                url:
+                  type: string
+                  description: Relative URL to preview the image (`imageUrl()`).
+
+    PurchasesMrrRow:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 490
+        voucher_no:
+          type: [string, "null"]
+          example: PMID00000490
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2026-11-02"
+        branch:
+          $ref: "#/components/schemas/NamedRef"
+        store:
+          $ref: "#/components/schemas/NamedRef"
+        purchases:
+          type: [object, "null"]
+          description: The purchase the goods were received for.
+          properties:
+            id:
+              type: integer
+              example: 438
+            voucher_no:
+              type: string
+              example: PUID00000438
+        total_qty:
+          type: string
+          description: Formatted like the web list.
+          example: "3,200.0000"
+        note:
+          type: [string, "null"]
+          example: null
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
+        can_edit:
+          type: boolean
+          description: Edit permission (no status check, as on the web).
+          example: true
+        can_delete:
+          type: boolean
+          description: Delete permission (no status check, as on the web).
+          example: true
+        can_show:
+          type: boolean
+          description: View permission.
+          example: true
+
+    PurchasesMrrInput:
+      type: object
+      description: |
+        Create / update body (same rules as the web form). Only `date`, `voucher_no` and `purchases_id` are
+        checked (as present), `branch_id` against the user's branch access, and `documents`; the product
+        rows are not validated, as on the web server. Send one value per product in the same order; a row
+        is saved only when it has an `approved_quantity`.
+      required: [date, voucher_no, purchases_id]
+      properties:
+        date:
+          type: string
+          format: date
+          description: Saved as `Y-m-d`.
+          example: "2026-11-16"
+        voucher_no:
+          type: string
+          description: Saved as sent.
+          example: PMID00000492
+        purchases_id:
+          type: integer
+          description: The purchase the goods are received for.
+          example: 445
+        branch_id:
+          type: [integer, "null"]
+          description: Optional; default branch when not sent. Must be one of the user's branch access branches.
+          example: 1
+        store_id:
+          type: [integer, "null"]
+          description: Optional; default store when not sent.
+          example: 1
+        note:
+          type: [string, "null"]
+          example: Received in full
+        product_id:
+          type: array
+          items:
+            type: integer
+          example: [1]
+        batch_no:
+          type: array
+          description: Batch names; a new name makes a new batch.
+          items:
+            type: string
+          example: [B-2026-11]
+        pack_size:
+          type: array
+          description: The stock summary is raised only for rows with a pack size.
+          items:
+            type: [number, "null"]
+          example: [1]
+        pack_no:
+          type: array
+          items:
+            type: [number, "null"]
+          example: [1]
+        quantity:
+          type: array
+          description: The purchase row quantity.
+          items:
+            type: number
+          example: [1]
+        remaining_quantity:
+          type: array
+          description: Not used by the server (the web form shows it).
+          items:
+            type: number
+          example: [1]
+        approved_quantity:
+          type: array
+          description: Received quantity. `total_qty` is their sum.
+          items:
+            type: number
+          example: [1]
+        documents:
+          type: [string, "null"]
+          description: "A path from `POST /purchases-mrrs/documents` (two-step upload). To send the file itself, use `multipart/form-data`."
+          example: public/uploads/purchasesMrr/tmp/2/8511794822067.png
+
+    PurchasesMrr:
+      type: object
+      description: |
+        An MRR as `PurchasesMrrService::details()` returns it: every MRR column, `purchases_mrr_details`
+        (with `product` and `batch`), `purchases_details` (the purchase rows), `branch`, `store` and
+        `purchases` (with `supplier`). Amounts are the stored decimal strings.
+      additionalProperties: true
+      properties:
+        id:
+          type: integer
+          example: 490
+        company_id:
+          type: integer
+          example: 1
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2026-11-02"
+        purchases_id:
+          type: [integer, "null"]
+          example: 438
+        branch_id:
+          type: [integer, "null"]
+          example: 1
+        store_id:
+          type: [integer, "null"]
+          example: 1
+        voucher_no:
+          type: [string, "null"]
+          example: PMID00000490
+        total_qty:
+          $ref: "#/components/schemas/Decimal"
+        documents:
+          type: [string, "null"]
+          description: Uploaded image path. An MRR made by purchase auto approval holds the purchase's document path (or `0` when it had none).
+        note:
+          type: [string, "null"]
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+        purchases_mrr_details:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              id:
+                type: integer
+              mrr_id:
+                type: integer
+              purchases_id:
+                type: integer
+              product_id:
+                type: integer
+              batch_no:
+                type: [integer, "null"]
+                description: Batch ID.
+              pack_size:
+                $ref: "#/components/schemas/Decimal"
+              pack_no:
+                $ref: "#/components/schemas/Decimal"
+              quantity:
+                $ref: "#/components/schemas/Decimal"
+              approved_quantity:
+                $ref: "#/components/schemas/Decimal"
+              product:
+                type: [object, "null"]
+                additionalProperties: true
+              batch:
+                type: [object, "null"]
+                additionalProperties: true
+        purchases_details:
+          type: array
+          description: The purchase rows (ordered `quantity`, received `approved_quantity`, `unit_price`).
+          items:
+            type: object
+            additionalProperties: true
+        branch:
+          type: [object, "null"]
+          additionalProperties: true
+        store:
+          type: [object, "null"]
+          additionalProperties: true
+        purchases:
+          type: [object, "null"]
+          description: The purchase, with its `supplier`.
+          additionalProperties: true
+
+    PurchasesMrrShow:
+      type: object
+      description: "`GET /purchases-mrrs/{id}` data: what the web controller gives the show page."
+      properties:
+        mrr:
+          allOf:
+            - $ref: "#/components/schemas/PurchasesMrr"
+            - type: object
+              properties:
+                created_by:
+                  $ref: "#/components/schemas/NamedRef"
+                approved_by:
+                  $ref: "#/components/schemas/NamedRef"
+                date_formatted:
+                  type: string
+                  description: "`date` in the general setup date format."
+                total_pack_size:
+                  type: string
+                  description: Sub-Total of the rows' pack size, formatted.
+                total_pack_no:
+                  type: string
+                  description: Sub-Total of the rows' pack no, formatted.
+                total_received_quantity:
+                  type: string
+                  description: Sub-Total of the rows' received quantity, formatted.
+                documents_url:
+                  type: string
+                  description: Relative URL of `documents` (`imageUrl()`); empty when there is none.
+        active_columns:
+          type: array
+          description: MRR details form columns; the page shows Batch No, Pack Size and Pack No. only when listed.
+          items:
+            type: string
+          example: [product_id, batch_no, pack_size, pack_no, quantity, remaining_quantity, approved_quantity]
+        company_info:
+          type: object
+          description: The company record (page footer).
+          additionalProperties: true
 
   responses:
     SessionUnavailable:
@@ -26788,7 +28003,7 @@ components:
             errors: null
 
     PurchasesOrderValidationError:
-      description: "`date`, `voucher_no` or `supplier_id` is missing, or `branch_id` is not a branch or is outside the user's branch access."
+      description: "`date`, `voucher_no` or `supplier_id` is missing, `branch_id` is not a branch or is outside the user's branch access, or `documents` is neither an image file nor the user's upload path from the last 24 hours."
       content:
         application/json:
           schema:
@@ -26838,7 +28053,7 @@ components:
             errors: null
 
     PurchasesValidationError:
-      description: "`date`, `voucher_no`, `supplier_id` or `payment_type` is missing, `branch_id` is not a branch or is outside the user's branch access, or `purchases_order_id` / `account_id` is not an array."
+      description: "`date`, `voucher_no`, `supplier_id` or `payment_type` is missing, `branch_id` is not a branch or is outside the user's branch access, `purchases_order_id` / `account_id` is not an array, or `documents` is neither an image file nor the user's upload path from the last 24 hours."
       content:
         application/json:
           schema:
@@ -26866,4 +28081,60 @@ components:
             code: 500
             success: false
             message: Purchases could not be saved.
+            errors: "SQLSTATE[...]"
+
+    DocumentUploadValidationError:
+      description: "`document` is missing, not an image, not jpg / jpeg / png / webp, or larger than 5 MB."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          example:
+            code: 422
+            success: false
+            message: "Validation Failed. The document must be an image. "
+            errors:
+              document:
+                - The document must be an image.
+
+    PurchasesMrrNotFound:
+      description: No MRR with this ID, a non-numeric ID, or an MRR of a branch outside the user's branch access.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    PurchasesMrrValidationError:
+      description: "`date`, `voucher_no` or `purchases_id` is missing, `branch_id` is not a branch or is outside the user's branch access, or `documents` is neither an image file nor the user's upload path from the last 24 hours."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          example:
+            code: 422
+            success: false
+            message: "Validation Failed. The purchases id field is required. "
+            errors:
+              purchases_id:
+                - The purchases id field is required.
+
+    PurchasesMrrSaveFailed:
+      description: |
+        Saving failed in the existing web code (for example a non-image `documents`); nothing is saved.
+        `errors` is the error message. When `approved_quantity`
+        is not sent at all the server error comes without the envelope (Laravel's own error body, as on
+        the web).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 500
+            success: false
+            message: Purchases MRR could not be saved.
             errors: "SQLSTATE[...]"
