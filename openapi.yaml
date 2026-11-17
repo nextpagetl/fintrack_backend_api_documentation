@@ -177,6 +177,8 @@ tags:
     description: Purchases (Purchases Manage → Purchases)
   - name: Purchases MRR
     description: Purchases MRR — materials receiving receipts (Purchases Manage → Purchases MRR)
+  - name: Purchases Payments
+    description: Supplier payments against purchases (Purchases Manage → Purchases Payment)
   - name: Inventory Adjustments
     description: Inventory adjustments — stock in / out with a reason (Purchases Manage → Inventory Adjustment)
   - name: Stock
@@ -20268,6 +20270,737 @@ paths:
         "419":
           $ref: "#/components/responses/CsrfMismatch"
 
+  /purchases-payments:
+    get:
+      tags:
+        - Purchases Payments
+      summary: List purchases payments
+      description: |
+        Paginated list of supplier payments (API version of the web list
+        `admin/inventory-transaction-purchases-payment-list`). Same rows as the web list:
+
+        - Only the logged-in user's company, dated on or after the **opening date**, `credit` > 0, and no
+          payment detail of form 2 (Payment Voucher), 3 (Receive Voucher), 7 (Purchases Return) or
+          22 (Debit Note).
+        - **Branch limit:** only payments of the branches the user's roles have a branch access permission
+          for. Superadmin sees every branch.
+        - `credit` (the web "Payment" column) is formatted like the web list; `date` is `Y-m-d`.
+        - `can_edit` / `can_delete` / `can_show`: the permissions only (no status check, as on the web).
+
+        Required permission: `module:purchases-manage.menu:purchases-payment.permission:view`
+      operationId: listPurchasesPayments
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, status, date, voucher no, payment type, cheque number, cheque date, credit, supplier name, branch name or bank name.
+          schema:
+            type: string
+          example: PAID
+        - name: branch_id
+          in: query
+          schema:
+            type: integer
+          example: 1
+        - name: supplier_id
+          in: query
+          schema:
+            type: integer
+          example: 1
+        - name: payment_type
+          in: query
+          schema:
+            type: string
+          example: Bank
+        - name: bank_id
+          in: query
+          schema:
+            type: integer
+          example: 364
+        - name: from_date
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2026-11-01"
+        - name: to_date
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2026-11-30"
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, date, voucher_no, credit, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+        - name: per_page
+          in: query
+          description: Rows per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+
+      responses:
+        "200":
+          description: Purchases payments
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/PurchasesPaymentRow"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 966
+                      voucher_no: PAID00000954
+                      date: "2026-11-17"
+                      supplier:
+                        id: 1
+                        name: Global Chemicals (China) CO., LTD.
+                      payment_type: Cash
+                      bank: null
+                      cheque_number: null
+                      cheque_date: null
+                      branch:
+                        id: 1
+                        name: Dhaka
+                      credit: "1.0000"
+                      status: Approved
+                      can_edit: true
+                      can_delete: true
+                      can_show: true
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 90
+                    last_page: 9
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "422":
+          $ref: "#/components/responses/PurchasesListValidationError"
+
+    post:
+      tags:
+        - Purchases Payments
+      summary: Create purchases payment
+      description: |
+        Saves a supplier payment (API version of the web form
+        `admin/inventory-transaction-purchases-payment-create`, saved by
+        `admin/inventory-transaction-purchases-payment-store`). Saving uses the existing web code unchanged
+        (`PurchasesPaymentService::store()`), so it works like the web:
+
+        - Get the supplier's due vouchers with `GET /purchases-payments/due-vouchers`, then send each row's
+          `voucher_id` / `form_id` in `purchases_voucher_id[]` / `purchases_form_id[]` and the amount paid now
+          in `credit[]` (same order). Rows with an empty `credit` are skipped.
+        - The voucher no is generated (a sent `voucher_no` is not used), `status` is `Approved`, `credit` = sum
+          of `credit[]` (or `credit_total` when `credit[]` is not sent).
+        - For each paid row: a payment detail row, the purchase's `paid_amount` / `due_amount`, and the
+          journal (debit the supplier side, credit the general setup cash in hand for `Cash`, `bank_id` for
+          `Bank`, `account_id` for other types).
+        - With no voucher rows: an advance payment of `credit_total` (`form_id` 9).
+        - **No server check** that a payment is within the due or the account balance (the web checks it only
+          in the browser). As on the web, `supplier_id` is not checked to exist and `date` is only required.
+        - Documents are not saved (as on the web).
+        - If saving fails nothing is saved and the API returns `500` with the error message.
+
+        Differences from the web: `branch_id` is checked against the user's branch access, and the response
+        is JSON (`201` with the new payment instead of a redirect to the show page).
+
+        Required permission: `module:purchases-manage.menu:purchases-payment.permission:create`
+      operationId: createPurchasesPayment
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurchasesPaymentInput"
+            examples:
+              againstVouchers:
+                summary: Pay 10 against a due voucher (Cash)
+                value:
+                  date: "2026-11-17"
+                  supplier_id: 1
+                  branch_id: 1
+                  payment_type: Cash
+                  purchases_voucher_id: [170, 162]
+                  purchases_form_id: [4, 4]
+                  credit: [10, ""]
+              bank:
+                summary: Bank payment
+                value:
+                  date: "2026-11-17"
+                  supplier_id: 1
+                  branch_id: 1
+                  payment_type: Bank
+                  bank_id: 364
+                  cheque_number: CHK-1
+                  cheque_date: "2026-11-17"
+                  purchases_voucher_id: [170]
+                  purchases_form_id: [4]
+                  credit: [10]
+              advance:
+                summary: Advance payment (no vouchers)
+                value:
+                  date: "2026-11-17"
+                  supplier_id: 1
+                  branch_id: 1
+                  payment_type: Cash
+                  credit_total: 25
+
+      responses:
+        "201":
+          description: Purchases payment created (`PurchasesPaymentService::details()` of the new payment).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PurchasesPayment"
+              example:
+                code: 201
+                success: true
+                message: Purchases payment created successfully.
+                data:
+                  id: 967
+                  company_id: 1
+                  voucher_no: PAID00000967
+                  branch_id: 1
+                  supplier_id: 1
+                  date: "2026-11-17"
+                  payment_type: Cash
+                  bank_id: null
+                  cheque_number: null
+                  cheque_id: null
+                  cheque_date: null
+                  credit: "10.000000"
+                  note: Cash purchases payment
+                  status: Approved
+                  purchases_payment_details:
+                    - id: 1209
+                      voucher_id: 170
+                      purchases_payment_id: 967
+                      form_id: 4
+                      credit: "10.000000"
+                  pending_cheque: null
+                  supplier:
+                    id: 1
+                    name: Global Chemicals (China) CO., LTD.
+                  branch:
+                    id: 1
+                    name: Dhaka
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/PurchasesPaymentValidationError"
+
+        "500":
+          description: |
+            Saving failed in the existing web code; nothing is saved. `errors` is the error message. As on the
+            web, a PHP error inside the save leaves its transaction open (not committed).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 500
+                success: false
+                message: Purchases payment could not be saved.
+                errors: "SQLSTATE[...]"
+
+  /purchases-payments/due-vouchers:
+    get:
+      tags:
+        - Purchases Payments
+      summary: Supplier's due vouchers
+      description: |
+        The due voucher table of the web create form (API version of
+        `admin/inventory-transaction-purchases-due-voucher-list`, loaded when a supplier is picked). Uses the
+        existing `PurchasesPaymentService::dueVoucherList()` unchanged (the supplier's advance balance is
+        already taken off the oldest dues) and works out each row as the web table does:
+
+        - `total_payment` = paid so far + the purchase's returns; `due_amount` = due − returns.
+        - Only rows with `due_amount` > 0 are listed.
+        - `totals` are the web table footer — they count every row with a due, also the ones not listed.
+
+        Required permission: `module:purchases-manage.menu:purchases-payment.permission:create`
+      operationId: listPurchasesPaymentDueVouchers
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: supplier_id
+          in: query
+          description: Not validated, as on the web; an unknown or missing supplier gives an empty list.
+          schema:
+            type: integer
+          example: 1
+
+      responses:
+        "200":
+          description: Due vouchers
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/PurchasesPaymentDueVoucher"
+                          totals:
+                            type: object
+                            properties:
+                              purchases_amount:
+                                type: string
+                              total_payment:
+                                type: string
+                              due_amount:
+                                type: string
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - voucher_id: 170
+                      form_id: 4
+                      date: "2025-09-29"
+                      date_formatted: "2025-09-29"
+                      voucher_no: PAID00000316
+                      purchases_amount: "76740.0000"
+                      total_payment: "65336.6933"
+                      due_amount: "11403.3067"
+                  totals:
+                    purchases_amount: "100,000,005,596,628.3750"
+                    total_payment: "4,465,807.3333"
+                    due_amount: "100,000,001,130,821.0312"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /purchases-payments/{id}:
+    get:
+      tags:
+        - Purchases Payments
+      summary: Get purchases payment
+      description: |
+        One supplier payment — the web "Payment Voucher" money receipt
+        (`admin/inventory-transaction-purchases-payment-show/{id}`).
+
+        - `details`: the existing `PurchasesPaymentService::details()` unchanged — every payment column,
+          `purchases_payment_details` (how the payment is split over the vouchers), `pending_cheque`,
+          `supplier` and `branch`. Also the data for `PUT`.
+        - What the page works out, with the same helpers: `print_date` (today — the page's "Date"),
+          `amount_in_word`, `paid_by` (`Cash` for payment type Cash, otherwise `Bank`), `payment_date`
+          (`cheque_date`, or `date`) and `credit_formatted` (the page's "Taka").
+        - `company_info`: the company record (page header).
+
+        The page's Cheque Clear button is not included (it never shows on the web either — purchases payments
+        no longer get pending cheques). As on the web page, a payment with status `Pending` and no pending
+        cheque fails with `500`.
+
+        Required permission: `module:purchases-manage.menu:purchases-payment.permission:view`
+      operationId: getPurchasesPayment
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/PurchasesPaymentId"
+
+      responses:
+        "200":
+          description: Purchases payment
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          details:
+                            allOf:
+                              - $ref: "#/components/schemas/PurchasesPayment"
+                              - type: object
+                                properties:
+                                  print_date:
+                                    type: string
+                                    description: Today's date in the general setup date format (the page's "Date").
+                                  amount_in_word:
+                                    type: string
+                                  paid_by:
+                                    type: string
+                                    enum: [Cash, Bank]
+                                  payment_date:
+                                    type: string
+                                    description: "`cheque_date`, or `date`, in the general setup date format."
+                                  credit_formatted:
+                                    type: string
+                          company_info:
+                            type: object
+                            additionalProperties: true
+              example:
+                code: 200
+                success: true
+                message: Detail data
+                data:
+                  details:
+                    id: 895
+                    company_id: 1
+                    voucher_no: PAID00000895
+                    branch_id: 1
+                    supplier_id: 1
+                    date: "2026-08-30"
+                    documents: null
+                    payment_type: Bank
+                    account_id: null
+                    availabel_balance: null
+                    bank_id: 364
+                    cheque_number: NA
+                    cheque_id: null
+                    cheque_date: "2026-08-30"
+                    debit: "0.000000"
+                    credit: "37540.230000"
+                    note: Cheque purchases payment
+                    status: Approved
+                    print_date: "2026-11-17"
+                    amount_in_word: Thirty Seven Thousand Five Hundred And Forty Taka & Twenty Three Poisa Only
+                    paid_by: Bank
+                    payment_date: "2026-08-30"
+                    credit_formatted: "37,540.2300"
+                    purchases_payment_details:
+                      - id: 1136
+                        voucher_id: 159
+                        purchases_payment_id: 895
+                        form_id: 4
+                        credit: "8587.356700"
+                      - id: 1137
+                        voucher_id: 170
+                        purchases_payment_id: 895
+                        form_id: 4
+                        credit: "28952.873300"
+                    pending_cheque: null
+                    supplier:
+                      id: 1
+                      name: Global Chemicals (China) CO., LTD.
+                      phone: "212321321"
+                    branch:
+                      id: 1
+                      name: Dhaka
+                  company_info:
+                    id: 1
+                    company_id: 1
+                    name: Demo Accounts ERP
+                    phone: "+8801778835183"
+                    email: acdemo@gmail.com
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PurchasesPaymentNotFound"
+
+        "500":
+          description: The payment has status `Pending` and no pending cheque — the web page fails the same way.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 500
+                success: false
+                message: Purchases payment could not be shown.
+                errors: Attempt to read property "status" on null
+
+    put:
+      tags:
+        - Purchases Payments
+      summary: Update purchases payment
+      description: |
+        Updates a supplier payment (API version of `admin/inventory-transaction-purchases-payment-update/{id}`).
+        Same body and rules as create, plus `purchases_payment_detail_id[]`; take the rows from
+        `GET /purchases-payments/{id}` → `details.purchases_payment_details` (`id`, `voucher_id`, `form_id`,
+        `credit`). Saving uses the existing `PurchasesPaymentService::update()` unchanged — works like the
+        web server:
+
+        - **No status check**, and no check of the edit page's rows (the web edit page only hides its save
+          button for a payment without detail rows; the server updates anyway).
+        - The payment's journals and detail rows are deleted and written again from the sent rows (or an
+          advance payment of `credit_total` with no rows); a **new voucher no** is generated, `status` is
+          `Approved` and `created_by` becomes the logged-in user.
+        - **As on the web, the purchases' `paid_amount` is not reduced first**, so every update adds the
+          payment to them again.
+        - Changing `Bank` to `Cash` keeps the old `bank_id`.
+        - A payment with a detail row that has no journal cannot be updated: `500`, nothing changed (as on
+          the web).
+
+        Differences from the web: `branch_id` is checked against the user's branch access, and responses are
+        JSON (`200` with the payment instead of a redirect).
+
+        Required permission: `module:purchases-manage.menu:purchases-payment.permission:edit`
+      operationId: updatePurchasesPayment
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/PurchasesPaymentId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/PurchasesPaymentInput"
+                - type: object
+                  properties:
+                    purchases_payment_detail_id:
+                      type: array
+                      description: The payment's detail row IDs, same order as `purchases_voucher_id[]`.
+                      items:
+                        type: integer
+                      example: [1136, 1137]
+            example:
+              date: "2026-08-30"
+              supplier_id: 1
+              branch_id: 1
+              payment_type: Bank
+              bank_id: 364
+              cheque_number: NA
+              cheque_date: "2026-08-30"
+              purchases_voucher_id: [159, 170]
+              purchases_form_id: [4, 4]
+              purchases_payment_detail_id: [1136, 1137]
+              credit: [8587.3567, 28952.8733]
+
+      responses:
+        "200":
+          description: Purchases payment updated (`PurchasesPaymentService::details()`).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PurchasesPayment"
+              example:
+                code: 200
+                success: true
+                message: Purchases payment updated successfully.
+                data:
+                  id: 895
+                  voucher_no: PAID00000967
+                  supplier_id: 1
+                  payment_type: Bank
+                  bank_id: 364
+                  credit: "37540.230000"
+                  status: Approved
+                  purchases_payment_details:
+                    - id: 1222
+                      voucher_id: 159
+                      purchases_payment_id: 895
+                      form_id: 4
+                      credit: "8587.356700"
+                    - id: 1223
+                      voucher_id: 170
+                      purchases_payment_id: 895
+                      form_id: 4
+                      credit: "28952.873300"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/PurchasesPaymentNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/PurchasesPaymentValidationError"
+
+        "500":
+          description: |
+            Saving failed in the existing web code; nothing is changed. `errors` is the error message (for
+            example a detail row without a journal). As on the web, a PHP error leaves its transaction open.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 500
+                success: false
+                message: Purchases payment could not be updated.
+                errors: Call to a member function delete() on null
+
+    delete:
+      tags:
+        - Purchases Payments
+      summary: Delete purchases payment
+      description: |
+        Deletes a supplier payment with the existing web code (`admin/inventory-transaction-purchases-payment-delete/{id}`,
+        `PurchasesPaymentService::destroy()`). Works like the web, so **results come with HTTP 200** — read
+        the body's `code`:
+
+        - `code: 204` "Data Deleted": the payment's pending cheque, journals, detail rows and the payment are
+          soft-deleted in one transaction. **No status check.** As on the web, the purchases' `paid_amount` /
+          `due_amount` are **not** changed back. Also returned (as on the web) when the delete fails with an
+          error message — nothing is deleted then.
+        - `code: 203` "Invalid ID": the ID is not numeric.
+        - `code: 404` "Not Found": no payment with this ID, or a payment of a branch outside the user's
+          branch access.
+        - HTTP `500`: a detail row has no journal (some supplier opening payments) — the existing code fails
+          with a PHP error and nothing is deleted (the web shows an error page; its transaction is left open,
+          as on the web).
+
+        Required permission: `module:purchases-manage.menu:purchases-payment.permission:delete`
+      operationId: deletePurchasesPayment
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - name: id
+          in: path
+          required: true
+          description: Purchases payment ID. A non-numeric ID returns the "Invalid ID" body (HTTP 200).
+          schema:
+            type: integer
+          example: 895
+
+      responses:
+        "200":
+          description: "As on the web, with HTTP 200: deleted (`code: 204`), invalid ID (`code: 203`) or not found (`code: 404`)."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                deleted:
+                  summary: Deleted
+                  value:
+                    code: 204
+                    success: true
+                    message: Data Deleted
+                    data: Deleted Successfully
+                invalidId:
+                  summary: Non-numeric ID
+                  value:
+                    code: 203
+                    success: false
+                    message: Invalid ID
+                    errors: abc
+                notFound:
+                  summary: Not found or outside the user's branch access
+                  value:
+                    code: 404
+                    success: false
+                    message: Not Found
+                    errors: Data Not Found
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "500":
+          description: A payment detail row has no journal; nothing is deleted (the web fails the same way).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 500
+                success: false
+                message: Purchases payment could not be deleted.
+                errors: Call to a member function delete() on null
+
   /inventory-adjustments:
     get:
       tags:
@@ -21750,6 +22483,17 @@ components:
       schema:
         type: integer
       example: 490
+
+    PurchasesPaymentId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Purchases payment ID (the `id` of a list row). An unknown or non-numeric ID, or a payment of a
+        branch outside the user's branch access, returns `404`.
+      schema:
+        type: integer
+      example: 895
 
     InventoryAdjustmentId:
       name: id
@@ -26198,6 +26942,265 @@ components:
               type: boolean
               description: VAT & SD on (VAT and SD row values shown).
 
+    PurchasesPaymentRow:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 966
+        voucher_no:
+          type: [string, "null"]
+          example: PAID00000954
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2026-11-17"
+        supplier:
+          $ref: "#/components/schemas/NamedRef"
+        payment_type:
+          type: [string, "null"]
+          example: Cash
+        bank:
+          $ref: "#/components/schemas/NamedRef"
+          description: The bank chart of account (`bank_id`), or `null`.
+        cheque_number:
+          type: [string, "null"]
+          example: null
+        cheque_date:
+          type: [string, "null"]
+          example: null
+        branch:
+          $ref: "#/components/schemas/NamedRef"
+        credit:
+          type: string
+          description: The paid amount (the web list "Payment" column), formatted like the web list.
+          example: "1.0000"
+        status:
+          type: string
+          example: Approved
+        can_edit:
+          type: boolean
+          description: Edit permission (the web list shows Edit without a permission check).
+          example: true
+        can_delete:
+          type: boolean
+          description: Delete permission.
+          example: true
+        can_show:
+          type: boolean
+          description: View permission.
+          example: true
+
+    PurchasesPayment:
+      type: object
+      description: |
+        `PurchasesPaymentService::details()` — every payment column plus `purchases_payment_details`,
+        `pending_cheque`, `supplier` and `branch` (full records, as the web page gets them).
+      additionalProperties: true
+      properties:
+        id:
+          type: integer
+          example: 895
+        company_id:
+          type: integer
+          example: 1
+        voucher_no:
+          type: [string, "null"]
+          example: PAID00000895
+        branch_id:
+          type: [integer, "null"]
+          example: 1
+        supplier_id:
+          type: [integer, "null"]
+          example: 1
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2026-08-30"
+        documents:
+          type: [string, "null"]
+          description: Never set by the existing code.
+        payment_type:
+          type: [string, "null"]
+          example: Bank
+        account_id:
+          type: [integer, "null"]
+        availabel_balance:
+          type: [string, number, "null"]
+        bank_id:
+          type: [integer, "null"]
+          example: 364
+        cheque_number:
+          type: [string, "null"]
+        cheque_id:
+          type: [integer, "null"]
+          description: Pending cheque ID. Always `null` — the existing code no longer makes pending cheques for purchases payments.
+        cheque_date:
+          type: [string, "null"]
+        debit:
+          $ref: "#/components/schemas/Decimal"
+        credit:
+          $ref: "#/components/schemas/Decimal"
+        note:
+          type: [string, "null"]
+          example: Cheque purchases payment
+        status:
+          type: string
+          example: Approved
+        updated_by:
+          type: [integer, "null"]
+        created_by:
+          type: [integer, "null"]
+        deleted_by:
+          type: [integer, "null"]
+        deleted_at:
+          type: [string, "null"]
+        created_at:
+          type: [string, "null"]
+          format: date-time
+        updated_at:
+          type: [string, "null"]
+          format: date-time
+        purchases_payment_details:
+          type: array
+          description: |
+            How the payment is split over the supplier's vouchers. `voucher_id` is the purchase ID for
+            `form_id` 4 (Purchase Voucher), the payment's own ID for 9 (advance payment); 20 = Supplier
+            Opening, 21 = Credit Note. These rows give `purchases_payment_detail_id[]`,
+            `purchases_voucher_id[]`, `purchases_form_id[]` and `credit[]` for `PUT /purchases-payments/{id}`.
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              id:
+                type: integer
+                example: 1136
+              voucher_id:
+                type: [integer, "null"]
+                example: 159
+              purchases_payment_id:
+                type: integer
+                example: 895
+              form_id:
+                type: integer
+                example: 4
+              credit:
+                $ref: "#/components/schemas/Decimal"
+        pending_cheque:
+          type: [object, "null"]
+          additionalProperties: true
+        supplier:
+          type: [object, "null"]
+          additionalProperties: true
+          description: The full supplier record.
+        branch:
+          type: [object, "null"]
+          additionalProperties: true
+          description: The full branch record.
+
+    PurchasesPaymentInput:
+      type: object
+      description: |
+        Create / update body. Rules are the web form's: `date`, `supplier_id` and `payment_type` required;
+        `bank_id` required when `payment_type` is `Bank`; `branch_id` checked against the user's branch access.
+        As on the web, `date` is only required (converted with `mysql_date()`, so a date the server cannot read
+        becomes another date), `supplier_id` is not checked to exist, and the voucher rows, `credit_total` and
+        the amounts are **not** validated (the web checks a payment against the due only in the browser).
+      required: [date, supplier_id, payment_type]
+      properties:
+        date:
+          type: string
+          example: "2026-11-17"
+        supplier_id:
+          type: integer
+          example: 1
+        payment_type:
+          type: string
+          description: |
+            A payment type name (`GET /pay-head-configs`). The journal account is the general setup default
+            cash in hand for `Cash`, `bank_id` for `Bank`, `account_id` for any other type.
+          example: Cash
+        bank_id:
+          type: [integer, "null"]
+          description: A bank chart of account (children of account 6). Required when `payment_type` is `Bank`.
+          example: 364
+        cheque_number:
+          type: [string, "null"]
+          example: CHK-1
+        cheque_date:
+          type: [string, "null"]
+          example: "2026-11-17"
+        branch_id:
+          type: [integer, "null"]
+          description: Optional; default branch when not sent. Must be one of the user's branch access branches.
+          example: 1
+        account_id:
+          type: [integer, "null"]
+          description: Journal account for payment types other than Cash and Bank.
+        voucher_no:
+          type: [string, "null"]
+          description: Accepted but not used — the voucher no is always generated.
+        credit_total:
+          type: [number, "null"]
+          description: |
+            Used as the payment amount when `credit[]` is not sent. With no voucher rows it makes an advance
+            payment (`form_id` 9) of this amount.
+          example: 25
+        purchases_voucher_id:
+          type: array
+          description: "`voucher_id` of each due voucher row (`GET /purchases-payments/due-vouchers`)."
+          items:
+            type: integer
+          example: [170]
+        purchases_form_id:
+          type: array
+          description: "`form_id` of each row, same order."
+          items:
+            type: integer
+          example: [4]
+        credit:
+          type: array
+          description: Amount paid now for each row, same order. Rows with an empty value are skipped. The payment's `credit` is their sum.
+          items:
+            type: [number, string, "null"]
+          example: [10]
+
+    PurchasesPaymentDueVoucher:
+      type: object
+      properties:
+        voucher_id:
+          type: integer
+          description: Send back as `purchases_voucher_id[]`.
+          example: 170
+        form_id:
+          type: integer
+          description: Send back as `purchases_form_id[]`.
+          example: 4
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2025-09-29"
+        date_formatted:
+          type: string
+          description: "`date` in the general setup date format."
+          example: "2025-09-29"
+        voucher_no:
+          type: [string, "null"]
+          description: The voucher no the web page shows (of the payment record the due row belongs to).
+          example: PAID00000316
+        purchases_amount:
+          type: [string, number]
+          description: Grand total (`numberFormat()`).
+          example: "76740.0000"
+        total_payment:
+          type: [string, number]
+          description: Paid so far plus the purchase returns (`numberFormat()`).
+          example: "65336.6933"
+        due_amount:
+          type: [string, number]
+          description: Current due — the most that should be paid now (`numberFormat()`).
+          example: "11403.3067"
+
     InventoryAdjustmentRow:
       type: object
       properties:
@@ -29279,6 +30282,34 @@ components:
             errors:
               document:
                 - The document must be an image.
+
+    PurchasesPaymentNotFound:
+      description: No payment with this ID, a non-numeric ID, or a payment of a branch outside the user's branch access.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    PurchasesPaymentValidationError:
+      description: "`date`, `supplier_id` or `payment_type` is missing, `bank_id` is missing for `Bank`, or `branch_id` is not a branch or is outside the user's branch access."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          example:
+            code: 422
+            success: false
+            message: "Validation Failed. The date field is required. The bank id field is required when payment type is Bank. "
+            errors:
+              date:
+                - The date field is required.
+              bank_id:
+                - The bank id field is required when payment type is Bank.
 
     InventoryAdjustmentNotFound:
       description: No adjustment with this ID, a non-numeric ID, or an adjustment of a branch outside the user's branch access.
