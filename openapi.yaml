@@ -177,6 +177,8 @@ tags:
     description: Purchases (Purchases Manage → Purchases)
   - name: Purchases MRR
     description: Purchases MRR — materials receiving receipts (Purchases Manage → Purchases MRR)
+  - name: Inventory Adjustments
+    description: Inventory adjustments — stock in / out with a reason (Purchases Manage → Inventory Adjustment)
   - name: Stock
     description: Product stock (Stock Manage)
 
@@ -20266,6 +20268,871 @@ paths:
         "419":
           $ref: "#/components/responses/CsrfMismatch"
 
+  /inventory-adjustments:
+    get:
+      tags:
+        - Inventory Adjustments
+      summary: List inventory adjustments
+      description: |
+        Paginated list of inventory adjustments (API version of the web list
+        `admin/inventory-transaction-adjustment-list`).
+
+        - Dated on or after the **opening date** (general setup `opening_date`) — same rows as the web list.
+        - **Branch limit:** only adjustments of the branches the user's roles have a branch access
+          permission for (`module:branch-access.menu:{branch}.permission:view`). Superadmin sees every
+          branch; a user with no branch permission gets an empty list.
+        - `subtotal`, `total_qty` and `grand_total` are formatted like the web list.
+        - `can_edit` / `can_delete`: the permission and `status` `Pending` (the web list buttons);
+          `can_show`: the view permission; `can_change_status`: the change-status permission.
+
+        Required permission: `module:purchases-manage.menu:inventory-adjustment.permission:view`
+      operationId: listInventoryAdjustments
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: search
+          in: query
+          description: Partial match on ID, status, date, voucher no, adjustment type, subtotal, total qty, grand total, note, reason name, branch name or store name.
+          schema:
+            type: string
+          example: IAID
+        - name: branch_id
+          in: query
+          schema:
+            type: integer
+          example: 1
+        - name: store_id
+          in: query
+          schema:
+            type: integer
+          example: 2
+        - name: reason
+          in: query
+          description: Inventory adjustment reason ID.
+          schema:
+            type: integer
+          example: 1
+        - name: adjustment_type
+          in: query
+          schema:
+            type: string
+            enum: [In, Out]
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [Approved, Pending]
+        - name: from_date
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2026-11-01"
+        - name: to_date
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2026-11-30"
+        - name: sort_by
+          in: query
+          description: Any other value falls back to `id`.
+          schema:
+            type: string
+            enum: [id, date, voucher_no, grand_total, status, created_at]
+            default: id
+        - name: sort_dir
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+        - name: per_page
+          in: query
+          description: Rows per page (1–100). Any other value falls back to `10`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+
+      responses:
+        "200":
+          description: Inventory adjustments
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/InventoryAdjustmentRow"
+                          pagination:
+                            $ref: "#/components/schemas/PaginationMeta"
+              example:
+                code: 200
+                success: true
+                message: List Data
+                data:
+                  items:
+                    - id: 56
+                      voucher_no: IAID00000056
+                      date: "2026-11-17"
+                      branch:
+                        id: 1
+                        name: Dhaka
+                      store:
+                        id: 2
+                        name: Tongi
+                      reason:
+                        id: 1
+                        name: Goods Damage
+                      adjustment_type: Out
+                      subtotal: "43.7500"
+                      total_qty: "0.0000"
+                      grand_total: "43.7500"
+                      note: null
+                      status: Pending
+                      can_edit: true
+                      can_delete: true
+                      can_show: true
+                      can_change_status: true
+                  pagination:
+                    current_page: 1
+                    per_page: 10
+                    total: 53
+                    last_page: 6
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "422":
+          description: A filter has a wrong value (dates must be `Y-m-d`; `adjustment_type` must be `In` or `Out`; `status` must be `Approved` or `Pending`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected adjustment type is invalid. "
+                errors:
+                  adjustment_type:
+                    - The selected adjustment type is invalid.
+
+    post:
+      tags:
+        - Inventory Adjustments
+      summary: Create inventory adjustment
+      description: |
+        Creates an inventory adjustment (API version of the web form
+        `admin/inventory-transaction-adjustment-create`, saved by
+        `admin/inventory-transaction-adjustment-store`). Saving uses the existing web code unchanged
+        (`InventoryAdjustmentService::store()`), so it works like the web:
+
+        - Required: `date` (`Y-m-d`), `store_id`, `reason`. `branch_id` is optional (default branch when
+          not sent); when sent it must be one of the user's branch access branches, otherwise `422`.
+        - `adjustment_type` and the product rows are **not** validated, as on the web. Only `Out` lowers
+          the stock; any other value (also not sent) raises it.
+        - The voucher no is always generated (a sent `voucher_no` is not used). It comes from the last
+          adjustment ID + 1, so it does not always match the new `id`.
+        - `grand_total` = sum of `total_price`, `subtotal` = `sub_total` as sent, `status` `Pending`.
+          `total_qty` is not filled.
+        - **Auto approval:** when general setup `inventory_adjust_approval` is `Auto Approval`, the same
+          save also makes the journal (`general` with `form_id` 16: debit / credit accounts of the
+          reason), the stock rows (`in` / `out`) and the stock summary, and sets `status` `Approved`
+          (`approved_by` is not set). With `Pending Approval` only the adjustment is saved.
+        - `documents`, either:
+          - a **file** (send the request as `multipart/form-data`) — saved as on the web, in
+            `public/uploads/adjustment/{id}/`; or
+          - a **path** from `POST /inventory-adjustments/documents` (two-step upload) — after the
+            adjustment is saved the file is moved to `public/uploads/inventoryAdjustment/{id}/` and set
+            as `documents`, in the same transaction. The path must be the logged-in user's upload from
+            the last 24 hours, otherwise `422`.
+        - If saving fails nothing is saved and the API returns `500` with the error message — for
+          example product rows not sent, a non-image file, or (auto approval) a reason without debit /
+          credit accounts.
+
+        Differences from the web: `date` must be `Y-m-d`, `store_id` / `reason` must exist, `branch_id`
+        is checked against the user's branch access, and the response is JSON (`201` with the new
+        adjustment instead of a redirect to the list).
+
+        Required permission: `module:purchases-manage.menu:inventory-adjustment.permission:create`
+      operationId: createInventoryAdjustment
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InventoryAdjustmentInput"
+            example:
+              date: "2026-11-17"
+              branch_id: 1
+              store_id: 1
+              reason: 1
+              adjustment_type: In
+              sub_total: 30
+              note: null
+              product_id: [159]
+              batch_no: [49]
+              pack_size: [1]
+              pack_no: [1]
+              quantity: [3]
+              unit_price: [10]
+              total_price: [30]
+              documents: public/uploads/inventoryAdjustment/tmp/2/5291794896225.png
+          multipart/form-data:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/InventoryAdjustmentInput"
+                - type: object
+                  properties:
+                    documents:
+                      type: string
+                      format: binary
+                      description: An image file (not checked, as on the web; a non-image file fails with `500`).
+
+      responses:
+        "201":
+          description: Inventory adjustment created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/InventoryAdjustment"
+              example:
+                code: 201
+                success: true
+                message: Inventory adjustment created successfully.
+                data: &inventoryAdjustmentExample
+                  id: 57
+                  company_id: 1
+                  date: "2026-11-17"
+                  branch_id: 1
+                  form_id: null
+                  store_id: 1
+                  account_id: null
+                  adjustment_type: In
+                  voucher_no: IAID00000057
+                  subtotal: "30.000000"
+                  documents: public/uploads/inventoryAdjustment/57/5291794896225.png
+                  reason: 1
+                  grand_total: "30.000000"
+                  debit: null
+                  credit: null
+                  total_qty: null
+                  note: null
+                  status: Pending
+                  approved_by: null
+                  updated_by: null
+                  created_by:
+                    id: 2
+                    name: Admin
+                  deleted_by: null
+                  deleted_at: null
+                  created_at: "2026-11-17T06:20:10.000000Z"
+                  updated_at: "2026-11-17T06:20:10.000000Z"
+                  inventory_adjustment_details:
+                    - id: 289
+                      inven_ad_id: 57
+                      branch_id: 1
+                      batch_no: 49
+                      date: "2026-11-17"
+                      pack_size: "1.000000"
+                      pack_no: "1.000000"
+                      quantity: "3.000000"
+                      unit_price: "10.000000"
+                      total_price: "30.000000"
+                      company_id: 1
+                      product_id: 159
+                      product:
+                        id: 159
+                        code: null
+                        name: Comfortsil FLD C845 (AM-6)
+                        category_id: 7
+                        status: Approved
+                        brand_id: 1
+                        company_id: 1
+                      batch:
+                        id: 49
+                        name: 2426EQ291B
+                  general: null
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/InventoryAdjustmentValidationError"
+
+        "500":
+          description: Saving failed in the existing web code; nothing is saved. `errors` is the error message.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 500
+                success: false
+                message: Inventory adjustment could not be saved.
+                errors: "array_sum(): Argument #1 ($array) must be of type array, null given"
+
+  /inventory-adjustments/documents:
+    post:
+      tags:
+        - Inventory Adjustments
+      summary: Upload inventory adjustment document
+      description: |
+        Step 1 of the two-step document upload (like the purchases order documents). The file is saved
+        with the web's own `helper::upload()` (scaled to fit 500×500, as the web upload) in the
+        logged-in user's temporary folder `public/uploads/inventoryAdjustment/tmp/{user_id}/`, and its
+        `path` is returned. **Nothing is written to the database.**
+
+        Step 2: send the `path` in `documents` to `POST /inventory-adjustments` or
+        `PUT /inventory-adjustments/{id}`. The file is then moved to
+        `public/uploads/inventoryAdjustment/{id}/` when the adjustment is saved. Temporary files never
+        used are deleted after 24 hours (`uploads:clean-tmp`).
+
+        As on the web, the file type and size are **not** checked. A file `helper::upload()` cannot read
+        as an image fails there with a server error (as on the web). Sending the file itself in
+        `documents` (one step, as on the web) still works.
+
+        Required permission: `module:purchases-manage.menu:inventory-adjustment.permission:create` or
+        `...permission:edit`
+      operationId: uploadInventoryAdjustmentDocument
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [document]
+              properties:
+                document:
+                  type: string
+                  format: binary
+                  description: An image file (type and size not checked, as on the web).
+
+      responses:
+        "201":
+          description: Uploaded to the temporary folder.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TmpDocumentUploaded"
+              example:
+                code: 201
+                success: true
+                message: Document uploaded successfully.
+                data:
+                  path: public/uploads/inventoryAdjustment/tmp/2/5291794896225.png
+                  url: /storage/uploads/inventoryAdjustment/tmp/2/5291794896225.png
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: "`document` is missing or is not an uploaded file."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The document field is required. "
+                errors:
+                  document:
+                    - The document field is required.
+
+  /inventory-adjustments/{id}:
+    get:
+      tags:
+        - Inventory Adjustments
+      summary: Get inventory adjustment
+      description: |
+        One inventory adjustment with its products (API version of the web page
+        `admin/inventory-transaction-adjustment-show/{id}`; also the data for the edit form). The data
+        is the same the web controller passes to the page:
+
+        - `details`: `InventoryAdjustmentService::details()` — every adjustment column,
+          `inventory_adjustment_details` with each product and batch, `general` (always `null`, see the
+          schema) and `created_by` / `updated_by` / `approved_by` as `{id, name}` (or `null`).
+        - `active_columns`: which product row columns the page shows (the details form setup).
+        - `company_info`: the company record (page footer).
+
+        Values are returned as stored; formatting is left to the client (the web does it in the page).
+        An adjustment of a branch outside the user's branch access returns `404` (superadmin: every
+        branch).
+
+        Required permission: `module:purchases-manage.menu:inventory-adjustment.permission:view`
+      operationId: getInventoryAdjustment
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/InventoryAdjustmentId"
+
+      responses:
+        "200":
+          description: Inventory adjustment
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          details:
+                            $ref: "#/components/schemas/InventoryAdjustment"
+                          active_columns:
+                            type: array
+                            description: Product row columns the page shows (details form setup).
+                            items:
+                              type: string
+                          company_info:
+                            type: object
+                            description: The company record (page footer).
+                            additionalProperties: true
+              example:
+                code: 200
+                success: true
+                message: Detail data
+                data:
+                  details:
+                    id: 56
+                    company_id: 1
+                    date: "2026-11-17"
+                    branch_id: 1
+                    form_id: null
+                    store_id: 2
+                    account_id: null
+                    adjustment_type: Out
+                    voucher_no: IAID00000056
+                    subtotal: "43.750000"
+                    documents: null
+                    reason: 1
+                    grand_total: "43.750000"
+                    debit: null
+                    credit: null
+                    total_qty: null
+                    note: null
+                    status: Pending
+                    approved_by: null
+                    updated_by: null
+                    created_by:
+                      id: 2
+                      name: Admin
+                    deleted_by: null
+                    deleted_at: null
+                    created_at: "2026-11-17T03:44:32.000000Z"
+                    updated_at: "2026-11-17T03:44:32.000000Z"
+                    inventory_adjustment_details:
+                      - id: 288
+                        inven_ad_id: 56
+                        branch_id: 1
+                        batch_no: 773
+                        date: "2026-11-17"
+                        pack_size: "25.000000"
+                        pack_no: "1.000000"
+                        quantity: "25.000000"
+                        unit_price: "1.750000"
+                        total_price: "43.750000"
+                        company_id: 1
+                        product_id: 2
+                        product:
+                          id: 2
+                          code: null
+                          name: Softener 4D
+                          category_id: 5
+                          status: Approved
+                          brand_id: 1
+                          company_id: 1
+                        batch:
+                          id: 773
+                          name: "260505"
+                    general: null
+                  active_columns: [product_id, batch_no, pack_size, pack_no, quantity, unit_price, total_price]
+                  company_info:
+                    id: 1
+                    company_id: 1
+                    name: Demo Accounts ERP
+                    phone: "+8801778835183"
+                    website: https://www.demo.com
+                    invoice_logo: public/uploads/invoice/8511792563861.png
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/InventoryAdjustmentNotFound"
+
+    put:
+      tags:
+        - Inventory Adjustments
+      summary: Update inventory adjustment
+      description: |
+        Updates an inventory adjustment (API version of
+        `admin/inventory-transaction-adjustment-update/{id}`; the form data comes from
+        `GET /inventory-adjustments/{id}`). Same body and rules as create. Saving uses the existing web
+        code unchanged (`InventoryAdjustmentService::update()`).
+
+        > **Currently always fails with `500`** — the existing update writes a `discount` column the
+        > `inventory_adjustments` table does not have (`Unknown column 'discount'`), so nothing is
+        > saved. The web edit page fails the same way. The API works without changes once that line is
+        > removed from the existing code.
+
+        What the existing update does (once it saves), as on the web:
+
+        - **No status check**: any adjustment can be updated, including approved ones.
+        - The product rows are replaced, `grand_total` is recalculated, a **new voucher no** is
+          generated, `status` goes back to `Pending` and `created_by` becomes the logged-in user.
+        - `adjustment_type` and `reason` are **not** updated.
+        - An approved adjustment's journal, stock rows and stock summary are left as they are, and
+          auto approval does not run again.
+        - `documents`: a file or an upload path, as in create; not sent — kept. To send a file use
+          `POST /inventory-adjustments/{id}` with `_method=PUT` as `multipart/form-data` (PHP does not
+          read files on a real `PUT`).
+        - **Difference from the web (as in the purchases API):** when a new document is saved, the
+          previous document file is deleted — only a file in the API folder
+          `public/uploads/inventoryAdjustment/{id}/`. A file in the web folder
+          `public/uploads/adjustment/{id}/` is kept (as on the web). Nothing is deleted when the update
+          fails.
+
+        Other differences from the web: `date` must be `Y-m-d`, `store_id` / `reason` must exist,
+        `branch_id` is checked against the user's branch access, and responses are JSON.
+
+        Required permission: `module:purchases-manage.menu:inventory-adjustment.permission:edit`
+      operationId: updateInventoryAdjustment
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - $ref: "#/components/parameters/InventoryAdjustmentId"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InventoryAdjustmentInput"
+            example:
+              date: "2026-11-17"
+              branch_id: 1
+              store_id: 2
+              reason: 1
+              sub_total: 43.75
+              product_id: [2]
+              batch_no: [773]
+              pack_size: [25]
+              pack_no: [1]
+              quantity: [25]
+              unit_price: [1.75]
+              total_price: [43.75]
+          multipart/form-data:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/InventoryAdjustmentInput"
+                - type: object
+                  properties:
+                    _method:
+                      type: string
+                      enum: [PUT]
+                      description: Send with `POST` to upload a file.
+                    documents:
+                      type: string
+                      format: binary
+                      description: An image file (not checked, as on the web).
+
+      responses:
+        "200":
+          description: Inventory adjustment updated (not reachable while the existing update fails).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/InventoryAdjustment"
+              example:
+                code: 200
+                success: true
+                message: Inventory adjustment updated successfully.
+                data: *inventoryAdjustmentExample
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "404":
+          $ref: "#/components/responses/InventoryAdjustmentNotFound"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          $ref: "#/components/responses/InventoryAdjustmentValidationError"
+
+        "500":
+          description: Saving failed in the existing web code; nothing is changed. `errors` is the error message (currently always the `discount` column error).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 500
+                success: false
+                message: Inventory adjustment could not be updated.
+                errors: "SQLSTATE[42S22]: Column not found: 1054 Unknown column 'discount' in 'field list' (...)"
+
+    delete:
+      tags:
+        - Inventory Adjustments
+      summary: Delete inventory adjustment
+      description: |
+        Deletes an inventory adjustment and its product rows with the same code as the web
+        (`admin/inventory-transaction-adjustment-delete/{id}`, `InventoryAdjustmentService::destroy()`).
+        Works like the web, so **every response is HTTP 200** — read the body's `code`:
+
+        - `code: 204` "Data Deleted": the adjustment and its rows are soft-deleted in one transaction.
+        - **No status check**: an `Approved` adjustment is deleted too, and — as on the web — its
+          journal, stock rows, stock summary and document file are **left as they are**.
+        - `code: 203` "Invalid ID": the ID is not numeric.
+        - `code: 404` "Not Found": no adjustment with this ID, or an adjustment of a branch outside the
+          user's branch access.
+        - Empty body: deleting failed in the existing web code; nothing is deleted.
+
+        The list's `can_delete` still needs `status` `Pending` (the web list button).
+
+        Required permission: `module:purchases-manage.menu:inventory-adjustment.permission:delete`
+      operationId: deleteInventoryAdjustment
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - name: id
+          in: path
+          required: true
+          description: Inventory adjustment ID. A non-numeric ID returns the "Invalid ID" body (HTTP 200).
+          schema:
+            type: integer
+          example: 56
+
+      responses:
+        "200":
+          description: "All results come with HTTP 200 (as on the web): deleted (`code: 204`), invalid ID (`code: 203`), not found (`code: 404`), or an empty body when deleting failed."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                deleted:
+                  summary: Deleted
+                  value:
+                    code: 204
+                    success: true
+                    message: Data Deleted
+                    data: Deleted Successfully
+                invalidId:
+                  summary: Non-numeric ID
+                  value:
+                    code: 203
+                    success: false
+                    message: Invalid ID
+                    errors: abc
+                notFound:
+                  summary: Not found or outside the user's branch access
+                  value:
+                    code: 404
+                    success: false
+                    message: Not Found
+                    errors: Data Not Found
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+  /inventory-adjustments/{id}/status/{status}:
+    patch:
+      tags:
+        - Inventory Adjustments
+      summary: Change inventory adjustment status
+      description: |
+        Sets an adjustment's `status` (API version of
+        `admin/inventory-transaction-adjustment-status/{id}/{status}`). No request body. Uses the
+        existing `InventoryAdjustmentService::statusUpdate()` unchanged: it only sets `status` — no
+        journal, stock or stock summary is made and `approved_by` is not set. (Stock and journal are
+        made only by auto approval when an adjustment is created.)
+
+        > **Currently always fails with `500`** — the existing status update reads a property its
+        > repository does not have (`$this->purchasesMrr`), so the status is not changed. The web route
+        > fails the same way (it is not linked from any web page).
+
+        Responses are the web's (HTTP 200, read the body's `code`): invalid ID → `code: 203`, not found
+        → `code: 404`, changed → `code: 204` "Status Update".
+
+        Differences from the web: `{status}` must be `Approved` or `Pending` (`422` otherwise), an
+        adjustment of a branch outside the user's branch access is reported as not found, and the
+        failure is returned as JSON `500`.
+
+        Required permission: `module:purchases-manage.menu:inventory-adjustment.permission:change-status`
+      operationId: changeInventoryAdjustmentStatus
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+        - name: id
+          in: path
+          required: true
+          description: Inventory adjustment ID. A non-numeric ID returns the "Invalid ID" body (HTTP 200).
+          schema:
+            type: integer
+          example: 56
+        - name: status
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [Approved, Pending]
+          example: Approved
+
+      responses:
+        "200":
+          description: "As on the web, with HTTP 200: changed (`code: 204`, not reachable while the existing code fails), invalid ID (`code: 203`) or not found (`code: 404`)."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                changed:
+                  summary: Status changed
+                  value:
+                    code: 204
+                    success: true
+                    message: Status Update
+                    data: Updata Successfully
+                invalidId:
+                  summary: Non-numeric ID
+                  value:
+                    code: 203
+                    success: false
+                    message: Invalid ID
+                    errors: abc
+                notFound:
+                  summary: Not found or outside the user's branch access
+                  value:
+                    code: 404
+                    success: false
+                    message: Not Found
+                    errors: Data Not Found
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: "`{status}` is not `Approved` or `Pending`."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
+        "500":
+          description: The existing status update failed; the status is not changed. `errors` is the error message (currently always this one).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 500
+                success: false
+                message: Status update failed
+                errors: Class name must be a valid object or a string
+
   /stock-info:
     get:
       tags:
@@ -20883,6 +21750,17 @@ components:
       schema:
         type: integer
       example: 490
+
+    InventoryAdjustmentId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Inventory adjustment ID (the `id` of a list row). An unknown or non-numeric ID, or an adjustment
+        of a branch outside the user's branch access, returns `404`.
+      schema:
+        type: integer
+      example: 56
 
   requestBodies:
     TmpDocumentUpload:
@@ -25320,6 +26198,311 @@ components:
               type: boolean
               description: VAT & SD on (VAT and SD row values shown).
 
+    InventoryAdjustmentRow:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 56
+        voucher_no:
+          type: [string, "null"]
+          example: IAID00000056
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2026-11-17"
+        branch:
+          $ref: "#/components/schemas/NamedRef"
+        store:
+          $ref: "#/components/schemas/NamedRef"
+        reason:
+          $ref: "#/components/schemas/NamedRef"
+        adjustment_type:
+          type: [string, "null"]
+          description: "`In` or `Out` (`null` when it was not sent; the stock then counts it as `In`)."
+          example: Out
+        subtotal:
+          type: string
+          description: Formatted like the web list (general setup `price_decimal_point` and `thousand_separate`).
+          example: "43.7500"
+        total_qty:
+          type: string
+          description: Formatted like the web list. Always a formatted zero, as the existing code never fills it.
+          example: "0.0000"
+        grand_total:
+          type: string
+          description: Formatted like the web list.
+          example: "43.7500"
+        note:
+          type: [string, "null"]
+          example: null
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Pending
+        can_edit:
+          type: boolean
+          description: Edit permission and `status` is `Pending` (the web list edit button). `PUT` has no status check.
+          example: true
+        can_delete:
+          type: boolean
+          description: Delete permission and `status` is `Pending` (the web list delete button). `DELETE` has no status check.
+          example: true
+        can_show:
+          type: boolean
+          description: View permission.
+          example: true
+        can_change_status:
+          type: boolean
+          description: Change-status permission.
+          example: true
+
+    InventoryAdjustment:
+      type: object
+      description: |
+        The web show page data (`InventoryAdjustmentService::details()`): every adjustment column plus the
+        relations below. Values are as stored (not formatted).
+      properties:
+        id:
+          type: integer
+          example: 56
+        company_id:
+          type: integer
+          example: 1
+        date:
+          type: [string, "null"]
+          format: date
+          example: "2026-11-17"
+        branch_id:
+          type: [integer, "null"]
+          example: 1
+        form_id:
+          type: [integer, "null"]
+          example: null
+        store_id:
+          type: [integer, "null"]
+          example: 2
+        account_id:
+          type: [integer, "null"]
+          example: null
+        adjustment_type:
+          type: [string, "null"]
+          example: Out
+        voucher_no:
+          type: [string, "null"]
+          example: IAID00000056
+        subtotal:
+          oneOf:
+            - $ref: "#/components/schemas/Decimal"
+            - type: "null"
+        documents:
+          type: [string, "null"]
+          description: Uploaded image path.
+          example: null
+        reason:
+          type: [integer, "null"]
+          description: Inventory adjustment reason ID.
+          example: 1
+        grand_total:
+          oneOf:
+            - $ref: "#/components/schemas/Decimal"
+            - type: "null"
+        debit:
+          type: [number, string, "null"]
+          example: null
+        credit:
+          type: [number, string, "null"]
+          example: null
+        total_qty:
+          type: [number, string, "null"]
+          description: Never filled by the existing code.
+          example: null
+        note:
+          type: [string, "null"]
+          example: null
+        status:
+          type: string
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Pending
+        approved_by:
+          $ref: "#/components/schemas/NamedRef"
+          description: "`{id, name}` or `null`. Never set by the existing code (also not by auto approval)."
+        updated_by:
+          $ref: "#/components/schemas/NamedRef"
+        created_by:
+          $ref: "#/components/schemas/NamedRef"
+        deleted_by:
+          type: [integer, "null"]
+          example: null
+        deleted_at:
+          type: [string, "null"]
+          example: null
+        created_at:
+          type: [string, "null"]
+          format: date-time
+        updated_at:
+          type: [string, "null"]
+          format: date-time
+        inventory_adjustment_details:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+                example: 288
+              inven_ad_id:
+                type: integer
+                example: 56
+              branch_id:
+                type: [integer, "null"]
+                example: 1
+              batch_no:
+                type: [integer, string, "null"]
+                example: 773
+              date:
+                type: [string, "null"]
+                format: date
+                example: "2026-11-17"
+              pack_size:
+                $ref: "#/components/schemas/Decimal"
+              pack_no:
+                $ref: "#/components/schemas/Decimal"
+              quantity:
+                $ref: "#/components/schemas/Decimal"
+              unit_price:
+                $ref: "#/components/schemas/Decimal"
+              total_price:
+                $ref: "#/components/schemas/Decimal"
+              company_id:
+                type: integer
+                example: 1
+              product_id:
+                type: integer
+                example: 2
+              product:
+                type: [object, "null"]
+                properties:
+                  id:
+                    type: integer
+                  code:
+                    type: [string, "null"]
+                  name:
+                    type: string
+                  category_id:
+                    type: [integer, "null"]
+                  status:
+                    type: [string, "null"]
+                  brand_id:
+                    type: [integer, "null"]
+                  company_id:
+                    type: [integer, "null"]
+              batch:
+                type: [object, "null"]
+                properties:
+                  id:
+                    type: integer
+                    example: 773
+                  name:
+                    type: string
+                    example: "260505"
+        general:
+          type: [object, "null"]
+          description: |
+            The journal (with `journals[].account`). **Always `null`** with the existing code: the
+            relation looks for `form_id` 5, but approval saves the journal with `form_id` 16 (same on
+            the web show page, which then shows no "Journal Details" button).
+          additionalProperties: true
+
+    InventoryAdjustmentInput:
+      type: object
+      description: |
+        Create / update body. Rules are the web form's: `date`, `store_id` and `reason` required;
+        `branch_id` checked against the user's branch access. As on the web, `adjustment_type`, the
+        product rows, `sub_total`, `note` and `account_id` are **not** validated. Send one value per
+        product in the same order.
+      required: [date, store_id, reason]
+      properties:
+        date:
+          type: string
+          format: date
+          description: "`Y-m-d`."
+          example: "2026-11-17"
+        branch_id:
+          type: [integer, "null"]
+          description: Optional; default branch when not sent. Must be one of the user's branch access branches.
+          example: 1
+        store_id:
+          type: integer
+          description: Must be an existing store.
+          example: 1
+        reason:
+          type: integer
+          description: An existing inventory adjustment reason (`GET /inventory-adjustment-reasons`). Its debit / credit accounts make the journal.
+          example: 1
+        adjustment_type:
+          type: [string, "null"]
+          description: |
+            `In` or `Out` (not checked, as on the web). Only `Out` lowers the stock; anything else
+            (also not sent) raises it. Create only — update does not change it.
+          example: In
+        voucher_no:
+          type: [string, "null"]
+          description: Accepted but not used — the voucher no is always generated.
+        account_id:
+          type: [integer, "null"]
+          description: Accepted but not saved by the existing code.
+        sub_total:
+          type: [number, "null"]
+          description: Saved as `subtotal` as sent.
+          example: 30
+        note:
+          type: [string, "null"]
+          example: Damaged in store
+        product_id:
+          type: array
+          items:
+            type: integer
+          example: [159]
+        batch_no:
+          type: array
+          description: Batch IDs. A missing value is the product's first batch with stock.
+          items:
+            type: [integer, "null"]
+          example: [49]
+        pack_size:
+          type: array
+          description: Missing values are saved as the row's `quantity`.
+          items:
+            type: [number, "null"]
+          example: [1]
+        pack_no:
+          type: array
+          description: Missing values are saved as `1`.
+          items:
+            type: [number, "null"]
+          example: [1]
+        quantity:
+          type: array
+          items:
+            type: number
+          example: [3]
+        unit_price:
+          type: array
+          items:
+            type: number
+          example: [10]
+        total_price:
+          type: array
+          description: "`grand_total` is their sum."
+          items:
+            type: number
+          example: [30]
+        documents:
+          type: [string, "null"]
+          description: "A path from `POST /inventory-adjustments/documents` (two-step upload). To send the file itself, use `multipart/form-data`."
+          example: public/uploads/inventoryAdjustment/tmp/2/5291794896225.png
+
     TmpDocumentUploaded:
       description: A document uploaded to the user's temporary folder (step 1 of the two-step upload).
       allOf:
@@ -28096,6 +29279,36 @@ components:
             errors:
               document:
                 - The document must be an image.
+
+    InventoryAdjustmentNotFound:
+      description: No adjustment with this ID, a non-numeric ID, or an adjustment of a branch outside the user's branch access.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: 404
+            success: false
+            message: Not Found
+            errors: Data Not Found
+
+    InventoryAdjustmentValidationError:
+      description: "`date` is missing or not `Y-m-d`, `store_id` or `reason` is missing or does not exist, `branch_id` is not a branch or is outside the user's branch access, or `documents` is neither a file nor the user's upload path from the last 24 hours."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorEnvelope"
+          example:
+            code: 422
+            success: false
+            message: "Validation Failed. The date does not match the format Y-m-d. The store id field is required. The reason field is required. "
+            errors:
+              date:
+                - The date does not match the format Y-m-d.
+              store_id:
+                - The store id field is required.
+              reason:
+                - The reason field is required.
 
     PurchasesMrrNotFound:
       description: No MRR with this ID, a non-numeric ID, or an MRR of a branch outside the user's branch access.
