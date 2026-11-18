@@ -12342,6 +12342,106 @@ paths:
                   status:
                     - The selected status is invalid.
 
+  /account-balance:
+    get:
+      tags:
+        - Chart of Accounts
+      summary: Available balance (Cash / Bank)
+      description: |
+        The "Available Balance" box of the web forms (Purchases, Purchases Payment, Purchases Return, …).
+        API version of the two web routes `admin/account-setup-chartOfAccount-balance` (Cash) and
+        `admin/account-setup-chartOfAccount-bank-balance` (Bank), with the same code:
+        `Journal::accountBalance($id) ?? 0` (opening balance + general ledger, debit − credit).
+
+        - `type=cash` — the setup's `default_cash_in_hand` account (what the web page sends as `account_id`).
+        - `type=bank` — the `bank_id` sent (a chart of account id, from the web Bank dropdown).
+
+        `balance` is a **string**, exactly as the web route sends it (e.g. `"40214.940002"`); use
+        `parseFloat()` before calculating. `bank_id` is not checked against the bank list, as on the web; an
+        unknown id gives `"0"`.
+
+        No permission is needed (logged-in users only), as the web routes.
+      operationId: getAccountBalance
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [cash, bank]
+          example: bank
+        - name: bank_id
+          in: query
+          description: Required when `type` is `bank`; not used for `cash`.
+          schema:
+            type: integer
+          example: 45
+
+      responses:
+        "200":
+          description: Balance
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          type:
+                            type: string
+                            enum: [cash, bank]
+                          account_id:
+                            type: integer
+                            description: The ledger whose balance is returned (default cash in hand, or `bank_id`).
+                          balance:
+                            type: string
+                            description: As the web route sends it; negative for accounts with more credit than debit.
+              examples:
+                cash:
+                  summary: type=cash
+                  value:
+                    code: 200
+                    success: true
+                    message: Detail data
+                    data:
+                      type: cash
+                      account_id: 4
+                      balance: "40214.940002"
+                bank:
+                  summary: type=bank&bank_id=45
+                  value:
+                    code: 200
+                    success: true
+                    message: Detail data
+                    data:
+                      type: bank
+                      account_id: 45
+                      balance: "46783.3309"
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "422":
+          description: "`type` missing or not `cash` / `bank`, or `bank_id` missing for `bank`."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The bank id field is required when type is bank. "
+                errors:
+                  bank_id:
+                    - The bank id field is required when type is bank.
+
   /chart-of-accounts:
     get:
       tags:
