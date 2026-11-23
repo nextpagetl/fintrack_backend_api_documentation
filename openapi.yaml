@@ -20386,6 +20386,10 @@ paths:
           for. Superadmin sees every branch.
         - `credit` (the web "Payment" column) is formatted like the web list; `date` is `Y-m-d`.
         - `can_edit` / `can_delete` / `can_show`: the permissions only (no status check, as on the web).
+        - `due_voucher_list`: the web **edit page's** voucher table (`items`) and footer (`totals`) for the
+          payment (`admin/inventory-transaction-purchases-payment-edit/{id}`), worked out exactly as on the
+          web from the existing `PurchasesPaymentService::getPurchasePaymentWithDetails()`. See
+          `PurchasesPaymentEditVoucherList`. Adds a few queries per row, so a large `per_page` is slower.
 
         Required permission: `module:purchases-manage.menu:purchases-payment.permission:view`
       operationId: listPurchasesPayments
@@ -20503,6 +20507,21 @@ paths:
                       can_edit: true
                       can_delete: true
                       can_show: true
+                      due_voucher_list:
+                        items:
+                          - purchases_payment_detail_id: 1136
+                            voucher_id: 159
+                            form_id: 4
+                            date: "2026-08-30"
+                            voucher_no: PAID00000954
+                            purchases_amount: "64012.0000"
+                            total_payment: "55424.6433"
+                            due_amount: "8587.3567"
+                            paid_amount: "8587.3567"
+                        totals:
+                          purchases_amount: "140,752.0000"
+                          total_payment: "129,347.6933"
+                          due_amount: "11,404.3067"
                   pagination:
                     current_page: 1
                     per_page: 10
@@ -27090,6 +27109,83 @@ components:
           type: boolean
           description: View permission.
           example: true
+        due_voucher_list:
+          $ref: "#/components/schemas/PurchasesPaymentEditVoucherList"
+
+    PurchasesPaymentEditVoucherList:
+      type: object
+      description: |
+        The web edit page's voucher table and footer
+        (`admin/inventory-transaction-purchases-payment-edit/{id}`), from the existing
+        `PurchasesPaymentService::getPurchasePaymentWithDetails(supplier_id, id)` (the payment's detail rows
+        with the supplier's per-voucher `purchasesAmount` = sum debit, `totalPayment` = sum credit,
+        `dueAmount` = sum (debit − credit), form 6 left out). Worked out exactly as the web blade:
+
+        - `paid` = the row's `credit`; `return` = `helper::getSalesReturnAmount(voucher_id)` (as on the web);
+        - row `total_payment` = (return + totalPayment) − paid; row `due_amount` = (dueAmount + paid) − return;
+        - only rows with `due_amount` > 0 are in `items` (as on the web);
+        - `totals` count **every** row, also the ones not in `items`, as the web footer:
+          `purchases_amount` = Σ purchasesAmount, `total_payment` = Σ (totalPayment + return),
+          `due_amount` = Σ dueAmount — so they need not match the sum of `items`.
+
+        The footer's "Paid Amount" and "Present Due", and each row's "Present Due", are worked out by the web
+        page's JS from the inputs, so they are not sent: row present due = `due_amount` − `paid_amount`;
+        footer paid amount = Σ `paid_amount`; footer present due = Σ `due_amount` − Σ `paid_amount`.
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              purchases_payment_detail_id:
+                type: integer
+                description: The payment detail row id (web hidden input `purchases_payment_detail_id[]`).
+                example: 1136
+              voucher_id:
+                type: [integer, "null"]
+                description: The voucher id (web hidden input `purchases_voucher_id[]`).
+                example: 159
+              form_id:
+                type: [integer, "null"]
+                description: The voucher's form id (web hidden input `purchases_form_id[]`).
+                example: 4
+              date:
+                type: [string, "null"]
+                description: The detail row's date, formatted with `helper::get_php_date()` (web "Sale Date").
+                example: "2026-08-30"
+              voucher_no:
+                type: [string, "null"]
+                description: The payment's own voucher no on every row, as on the web ("Voucher No").
+                example: PAID00000954
+              purchases_amount:
+                type: string
+                description: Web "Grand Total" (`helper::numberFormat()`).
+                example: "64012.0000"
+              total_payment:
+                type: string
+                description: Web "Total Payment" — paid before this payment (`helper::numberFormat()`).
+                example: "55424.6433"
+              due_amount:
+                type: string
+                description: Web "Current Due" — due before this payment (`helper::numberFormat()`).
+                example: "8587.3567"
+              paid_amount:
+                type: string
+                description: Web "Paid Amount" — paid on this voucher by this payment (`credit[]`, `helper::numberFormat()`).
+                example: "8587.3567"
+        totals:
+          type: object
+          description: The web footer's Grand Total / Total Payment / Current Due (`helper::pricePrint()`).
+          properties:
+            purchases_amount:
+              type: string
+              example: "140,752.0000"
+            total_payment:
+              type: string
+              example: "129,347.6933"
+            due_amount:
+              type: string
+              example: "11,404.3067"
 
     PurchasesPayment:
       type: object
