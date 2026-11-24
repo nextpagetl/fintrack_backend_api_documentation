@@ -46,10 +46,27 @@ info:
     | 401 | Not logged in / session expired | `Unauthenticated.` |
     | 403 | Missing Spatie permission | `User does not have the right permissions.` |
     | 419 | CSRF token missing or wrong | `CSRF token mismatch.` |
-    | 429 | More than 5 requests per minute to `POST /login`, `POST /forgot-password` or `PATCH /reset-password` | `Too Many Attempts.` |
 
     When the server runs with `APP_DEBUG=true`, these framework errors also contain
     `exception`, `file`, `line` and `trace`. Production must run with `APP_DEBUG=false`.
+
+    ## Rate limits
+    `POST /login`, `POST /forgot-password` and `PATCH /reset-password` share the same limits,
+    counted separately for each endpoint:
+
+    | Counted by | What is counted | Limit |
+    |---|---|---|
+    | IP | every request | 5 per minute |
+    | email + IP | failed responses (`401` / `422`) | 5 per minute |
+    | email | failed responses (`401` / `422`) | 20 per hour |
+
+    The email limits apply only when the email belongs to a user (matched case-insensitively);
+    a successful (`2xx`) response clears them. Over the limit the API returns `429` in the
+    normal envelope:
+
+    ```json
+    { "code": 429, "success": false, "message": "Too many attempts. Please try again later.", "errors": null }
+    ```
 
     ## Permissions
     Role, branch, store, division, district, upazila, union, employee, department, customer group, customer media, customer, supplier group, supplier, unit,
@@ -227,7 +244,8 @@ paths:
       summary: Login
       description: |
         Authenticates the user with the web session guard. Only users with
-        status `Approved` can log in. Limited to 5 requests per minute.
+        status `Approved` can log in. Rate limited (see "Rate limits"): wrong passwords count
+        toward the email limits, a successful login clears them.
       operationId: login
 
       security: []
@@ -344,7 +362,7 @@ paths:
         to the user. Use the code with `PATCH /reset-password`.
 
         A new request replaces any previous code for this user, so only the latest emailed
-        code works. No login needed. Limited to 5 requests per minute.
+        code works. No login needed. Rate limited (see "Rate limits").
       operationId: forgotPassword
 
       security: []
@@ -421,7 +439,8 @@ paths:
         belong to this email and must be used within 5 minutes. On success the code is
         removed, so it cannot be used again.
 
-        No login needed. Limited to 5 requests per minute.
+        No login needed. Rate limited (see "Rate limits"): wrong codes count toward the email
+        limits, a successful reset clears them.
       operationId: resetPassword
 
       security: []
@@ -30081,13 +30100,16 @@ components:
                 - The name field is required.
 
     TooManyRequests:
-      description: Too many attempts. Limit is 5 requests per minute (Laravel response, no envelope).
+      description: Too many attempts. See "Rate limits" in the API description.
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/FrameworkError"
+            $ref: "#/components/schemas/ErrorEnvelope"
           example:
-            message: Too Many Attempts.
+            code: 429
+            success: false
+            message: Too many attempts. Please try again later.
+            errors: null
 
     StatusValidationError:
       description: Status is missing or not `Approved` / `Inactive`.
