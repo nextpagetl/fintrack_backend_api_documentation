@@ -46,7 +46,7 @@ info:
     | 401 | Not logged in / session expired | `Unauthenticated.` |
     | 403 | Missing Spatie permission | `User does not have the right permissions.` |
     | 419 | CSRF token missing or wrong | `CSRF token mismatch.` |
-    | 429 | More than 5 login attempts per minute | `Too Many Attempts.` |
+    | 429 | More than 5 requests per minute to `POST /login`, `POST /forgot-password` or `PATCH /reset-password` | `Too Many Attempts.` |
 
     When the server runs with `APP_DEBUG=true`, these framework errors also contain
     `exception`, `file`, `line` and `trace`. Production must run with `APP_DEBUG=false`.
@@ -75,7 +75,7 @@ servers:
 
 tags:
   - name: Authentication
-    description: Session-based login and logout (Sanctum SPA)
+    description: Session-based login and logout (Sanctum SPA), and forgot / reset password
   - name: User
     description: The currently logged-in user
   - name: Dashboard
@@ -329,6 +329,175 @@ paths:
                 errors:
                   email:
                     - The email must be a valid email address.
+
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /forgot-password:
+    post:
+      tags:
+        - Authentication
+      summary: Forgot password (send reset code)
+      description: |
+        Checks that a user with this email exists, then generates a random 6 digit numeric
+        code, stores it (hashed) on the user with an expiry time of **5 minutes** and emails it
+        to the user. Use the code with `PATCH /reset-password`.
+
+        A new request replaces any previous code for this user, so only the latest emailed
+        code works. No login needed. Limited to 5 requests per minute.
+      operationId: forgotPassword
+
+      security: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: test.user@example.com
+
+      responses:
+        "200":
+          description: Code generated and emailed to the user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+              example:
+                code: 200
+                success: true
+                message: A verification code has been sent to your email.
+                data: null
+
+        "404":
+          description: No user has this email.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 404
+                success: false
+                message: No account found with this email address.
+                errors: null
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Request validation failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The email field is required. "
+                errors:
+                  email:
+                    - The email field is required.
+
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /reset-password:
+    patch:
+      tags:
+        - Authentication
+      summary: Reset password with code
+      description: |
+        Sets a new password using the 6 digit code from `POST /forgot-password`. The code must
+        belong to this email and must be used within 5 minutes. On success the code is
+        removed, so it cannot be used again.
+
+        No login needed. Limited to 5 requests per minute.
+      operationId: resetPassword
+
+      security: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - code
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: test.user@example.com
+                code:
+                  type: string
+                  description: 6 digit numeric code from the email.
+                  pattern: "^[0-9]{6}$"
+                  example: "482913"
+                password:
+                  type: string
+                  format: password
+                  minLength: 6
+                  example: NewPass@123
+
+      responses:
+        "200":
+          description: Password changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+              example:
+                code: 200
+                success: true
+                message: Password has been reset successfully.
+                data: null
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: |
+            Request validation failed (body has `errors` per field), or the code is wrong,
+            expired or there is no user with this email (`errors` is `null`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ValidationErrorEnvelope"
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                validation:
+                  summary: Validation failed
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The code must be 6 digits. "
+                    errors:
+                      code:
+                        - The code must be 6 digits.
+                invalidCode:
+                  summary: Wrong or expired code
+                  value:
+                    code: 422
+                    success: false
+                    message: Invalid or expired code.
+                    errors: null
 
         "429":
           $ref: "#/components/responses/TooManyRequests"
@@ -29912,7 +30081,7 @@ components:
                 - The name field is required.
 
     TooManyRequests:
-      description: Too many login attempts. Limit is 5 requests per minute (Laravel response, no envelope).
+      description: Too many attempts. Limit is 5 requests per minute (Laravel response, no envelope).
       content:
         application/json:
           schema:
