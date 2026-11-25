@@ -51,7 +51,8 @@ info:
     `exception`, `file`, `line` and `trace`. Production must run with `APP_DEBUG=false`.
 
     ## Rate limits
-    `POST /login`, `POST /forgot-password` and `PATCH /reset-password` share the same limits,
+    `POST /login`, `POST /forgot-password`, `POST /verify-reset-code` and `PATCH /reset-password`
+    share the same limits,
     counted separately for each endpoint:
 
     | Counted by | What is counted | Limit |
@@ -425,6 +426,94 @@ paths:
                 errors:
                   email:
                     - The email field is required.
+
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /verify-reset-code:
+    post:
+      tags:
+        - Authentication
+      summary: Verify reset code
+      description: |
+        Checks that the 6 digit code from `POST /forgot-password` belongs to this email and has
+        not expired (5 minutes). Use it to move the user to the new password screen.
+
+        The code is **not** used up: send the same `email` and `code` with the new password to
+        `PATCH /reset-password` before the code expires.
+
+        No login needed. Rate limited (see "Rate limits"): wrong codes count toward the email
+        limits, a successful check clears them.
+      operationId: verifyResetCode
+
+      security: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - code
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: test.user@example.com
+                code:
+                  type: string
+                  description: 6 digit numeric code from the email.
+                  pattern: "^[0-9]{6}$"
+                  example: "482913"
+
+      responses:
+        "200":
+          description: Code is correct and not expired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+              example:
+                code: 200
+                success: true
+                message: Code verified successfully.
+                data: null
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: |
+            Request validation failed (body has `errors` per field), or the code is wrong,
+            expired or there is no user with this email (`errors` is `null`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ValidationErrorEnvelope"
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                validation:
+                  summary: Validation failed
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The code must be 6 digits. "
+                    errors:
+                      code:
+                        - The code must be 6 digits.
+                invalidCode:
+                  summary: Wrong or expired code
+                  value:
+                    code: 422
+                    success: false
+                    message: Invalid or expired code.
+                    errors: null
 
         "429":
           $ref: "#/components/responses/TooManyRequests"
