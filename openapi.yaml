@@ -96,6 +96,8 @@ tags:
     description: Session-based login and logout (Sanctum SPA), and forgot / reset password
   - name: User
     description: The currently logged-in user
+  - name: Export
+    description: Excel, CSV or PDF download of a menu's list
   - name: Dashboard
     description: Company dashboard data
   - name: Roles
@@ -662,6 +664,9 @@ paths:
 
         `company` holds the name, address, phone and email of the user's company
         (company settings), or `null` when no company is found.
+
+        `column_view_config` is the user's own list of visible columns per module + menu, as last
+        saved with `PUT /column-view-config`, or `null` when the user has never saved it.
       operationId: getCurrentUser
 
       security:
@@ -705,6 +710,13 @@ paths:
                                     permission: [view, create, edit, change-status]
                                   user:
                                     permission: [view]
+                        column_view_config:
+                          - module: customer-manage
+                            menu: customer-group
+                            columns: [id, name, status]
+                          - module: customer-manage
+                            menu: customer
+                            columns: []
                         company:
                           id: 1
                           name: Test Company
@@ -726,6 +738,7 @@ paths:
                         email: test.sales@example.com
                         role_id: 8
                         role: null
+                        column_view_config: null
                         company:
                           id: 1
                           name: Test Company
@@ -737,6 +750,276 @@ paths:
 
         "401":
           $ref: "#/components/responses/Unauthorized"
+
+  /column-view-config:
+    put:
+      tags:
+        - User
+      summary: Save column view config
+      description: |
+        Saves the logged-in user's visible columns per module + menu. One config per user: the whole
+        list in `data` replaces the saved list (send every menu each time). The saved list is returned
+        in `GET /me` (`column_view_config`) and is used by `GET /export` to pick the file columns.
+
+        - `columns` may be empty (`[]`), but the key must be sent.
+        - The same `module` + `menu` pair must not come twice (the same `menu` in different modules is fine).
+        - Only `module`, `menu` and `columns` of each item are saved; other keys are ignored.
+
+        No extra permission is needed; a user can only change their own config.
+      operationId: saveColumnViewConfig
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ColumnViewConfigItem"
+            example:
+              data:
+                - module: customer-manage
+                  menu: customer-group
+                  columns: [id, name, status]
+                - module: customer-manage
+                  menu: customer
+                  columns: []
+
+      responses:
+        "200":
+          description: Column view config saved
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/ColumnViewConfigItem"
+              example:
+                code: 200
+                success: true
+                message: Column view config updated successfully.
+                data:
+                  - module: customer-manage
+                    menu: customer-group
+                    columns: [id, name, status]
+                  - module: customer-manage
+                    menu: customer
+                    columns: []
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: Request validation failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              examples:
+                missingData:
+                  summary: data missing
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The data field is required. "
+                    errors:
+                      data:
+                        - The data field is required.
+                missingFields:
+                  summary: module missing, columns key missing
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The data.0.module field is required. The data.0.columns field must be present. "
+                    errors:
+                      data.0.module:
+                        - The data.0.module field is required.
+                      data.0.columns:
+                        - The data.0.columns field must be present.
+                duplicateMenu:
+                  summary: Same module + menu twice
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The data.1.menu is duplicated for module customer-manage. "
+                    errors:
+                      data.1.menu:
+                        - The data.1.menu is duplicated for module customer-manage.
+
+  /export:
+    get:
+      tags:
+        - Export
+      summary: Export a menu's list as Excel, CSV or PDF
+      description: |
+        Downloads a file of a menu's list data. The rows come from the menu's API list endpoint
+        (called internally, page by page), so the file has the same data, company filter, search
+        and sort as that list (default sort: newest first, like the list). Soft-deleted rows are
+        not exported.
+
+        **Columns:** taken from the user's column view config of this `module` + `menu`
+        (`PUT /column-view-config`), in the user's order; unknown columns are ignored. When the user
+        has no config for this menu, all default columns are exported. When the user's `columns`
+        for this menu is empty (`[]`), nothing is exported (`422`).
+
+        **Exportable menus:**
+
+        | module | menu | API list | Default columns |
+        |---|---|---|---|
+        | `customer-manage` | `customer-group` | `GET /customer-groups` | `id`, `name`, `status`, `created_at` |
+
+        Any other `module` + `menu` returns `422`.
+
+        Required permission: `module:<module>.menu:<menu>.permission:view`
+        (e.g. `module:customer-manage.menu:customer-group.permission:view`).
+      operationId: exportData
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - name: module
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 255
+          example: customer-manage
+        - name: menu
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 255
+          example: customer-group
+        - name: file_type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [excel, csv, pdf]
+          example: excel
+        - name: type
+          in: query
+          required: true
+          description: "`all` = every row; `range` = only ids from `from_id` to `to_id` (both included)."
+          schema:
+            type: string
+            enum: [all, range]
+          example: all
+        - name: from_id
+          in: query
+          description: Required when `type` is `range`.
+          schema:
+            type: integer
+            minimum: 1
+          example: 1
+        - name: to_id
+          in: query
+          description: Required when `type` is `range`; must be greater than or equal to `from_id`.
+          schema:
+            type: integer
+          example: 50
+        - name: search
+          in: query
+          description: Passed to the menu's list (same as the list's `search`).
+          schema:
+            type: string
+        - name: sort_by
+          in: query
+          description: Passed to the menu's list (same values as the list's `sort_by`).
+          schema:
+            type: string
+          example: name
+        - name: sort_dir
+          in: query
+          description: Passed to the menu's list.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+
+      responses:
+        "200":
+          description: |
+            File download (`Content-Disposition: attachment`). File name:
+            `<file_name>-<YYYY-MM-DD>.<xlsx|csv|pdf>`, e.g. `customer-groups-2026-11-26.xlsx`.
+            The first row has the column headings.
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+            text/csv:
+              schema:
+                type: string
+                format: binary
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "422":
+          description: Request validation failed, the menu cannot be exported, or the user's columns are empty.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              examples:
+                missingParams:
+                  summary: module / menu missing
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The module field is required. The menu field is required. "
+                    errors:
+                      module:
+                        - The module field is required.
+                      menu:
+                        - The menu field is required.
+                notExportable:
+                  summary: Menu cannot be exported
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The selected menu cannot be exported. "
+                    errors:
+                      menu:
+                        - The selected menu cannot be exported.
+                noColumns:
+                  summary: User's columns for this menu are empty
+                  value:
+                    code: 422
+                    success: false
+                    message: Validation Failed. No columns selected for this menu.
+                    errors:
+                      columns:
+                        - No columns selected for this menu.
 
   /dashboard:
     get:
@@ -4901,7 +5184,7 @@ paths:
                     - id: 2
                       company_id: 1
                       name: Wholesale
-                      status: Approved
+                      status: Active
                       created_at: "2026-11-09T10:20:00.000000Z"
                     - id: 1
                       company_id: 1
@@ -4925,13 +5208,13 @@ paths:
         - Customer Groups
       summary: Create customer group
       description: |
-        Creates a customer group for the logged-in user's company. The validation rules are the same
-        as the web form (`admin/sales-setup-customer-group-create`), read from the customer group form settings, plus a unique
-        name check.
+        Creates a customer group for the logged-in user's company. `name` has the web form's rules
+        (`admin/sales-setup-customer-group-create`: required, 2–100 characters), plus:
 
-        - `status` is always saved as `Approved`, even if another value is sent.
-        - `name` must be unique within the logged-in user's company (not case-sensitive).
-          Soft-deleted customer groups and other companies' customer groups are not counted.
+        - `name` must be a string.
+        - `name` must be unique among the customer groups (case-insensitive; soft-deleted groups are
+          not counted, so a deleted group's name can be used again). The web form does not check this.
+        - `status` is always saved as `Active`, even if another value is sent.
 
         Required permission: `module:customer-manage.menu:customer-group.permission:create`
       operationId: createCustomerGroup
@@ -4974,7 +5257,7 @@ paths:
                   id: 3
                   company_id: 1
                   name: Wholesale Partner
-                  status: Approved
+                  status: Active
                   created_at: "2026-11-09T10:30:00.000000Z"
 
         "401":
@@ -4996,12 +5279,12 @@ paths:
       summary: Update customer group
       description: |
         Updates a customer group's name and status (API version of the web edit form
-        `admin/sales-setup-customer-group-edit/{id}`). The validation rules are the same as the web form,
-        plus a unique name check and a required status.
+        `admin/sales-setup-customer-group-edit/{id}`). `name` has the web form's rules (required,
+        2–100 characters), must be a string and must be unique among the other customer groups
+        (case-insensitive; soft-deleted groups and this group are not counted, so keeping the same name
+        is fine). `status` is required.
 
-        - `name` must be unique within the logged-in user's company (not case-sensitive); the
-          customer group's own name may be kept.
-        - `status` is taken from the body (`Approved`, `Inactive`, `Pending` or `Cancel`).
+        - `status` is taken from the body (`Active`, `Inactive`, `Pending` or `Cancel`).
         - `company_id` is set to the logged-in user's company.
 
         Required permission: `module:customer-manage.menu:customer-group.permission:edit`
@@ -5028,7 +5311,7 @@ paths:
                   $ref: "#/components/schemas/CustomerGroupName"
                 status:
                   type: string
-                  enum: [Approved, Inactive, Pending, Cancel]
+                  enum: [Active, Inactive, Pending, Cancel]
                   example: Inactive
 
       responses:
@@ -5074,9 +5357,9 @@ paths:
         - Customer Groups
       summary: Delete customer group
       description: |
-        Soft-deletes a customer group (`deleted_at` is set; the row stays in the database). A deleted
-        customer group is no longer listed, returns `404` on every other endpoint, and its name can be
-        used again.
+        Soft-deletes a customer group (`deleted_at` is set and `deleted_by` is set to the logged-in
+        user; the row stays in the database). A deleted customer group is no longer listed and returns
+        `404` on every other endpoint.
 
         The customer group cannot be deleted (`409`) when it is used by any of the customers
         (`customers.customer_type`; soft-deleted customers are not counted). The web list uses the same check
@@ -5146,7 +5429,8 @@ paths:
         - Customer Groups
       summary: Change customer group status
       description: |
-        Sets the customer group's status to `Approved` or `Inactive`.
+        Sets the customer group's status to `Active`, `Inactive`, `Pending` or `Cancel` (the values of
+        the `customer_groups.status` column, same as `PUT /customer-groups/{id}`).
 
         Required permission: `module:customer-manage.menu:customer-group.permission:change-status`
       operationId: updateCustomerGroupStatus
@@ -5169,7 +5453,7 @@ paths:
               properties:
                 status:
                   type: string
-                  enum: [Approved, Inactive]
+                  enum: [Active, Inactive, Pending, Cancel]
                   example: Inactive
 
       responses:
@@ -5208,7 +5492,7 @@ paths:
           $ref: "#/components/responses/CsrfMismatch"
 
         "422":
-          description: Status is missing or not `Approved` / `Inactive`.
+          description: Status is missing or not `Active` / `Inactive` / `Pending` / `Cancel`.
           content:
             application/json:
               schema:
@@ -23022,6 +23306,13 @@ components:
               example: Test Manager
             permissions:
               $ref: "#/components/schemas/PermissionTree"
+        column_view_config:
+          type: [array, "null"]
+          description: |
+            The user's visible columns per module + menu, as last saved with `PUT /column-view-config`.
+            `null` when the user has never saved it. Also used by `GET /export` to pick the file columns.
+          items:
+            $ref: "#/components/schemas/ColumnViewConfigItem"
         company:
           type: [object, "null"]
           description: |
@@ -23051,6 +23342,31 @@ components:
           type: [string, "null"]
           format: date-time
           example: null
+
+    ColumnViewConfigItem:
+      type: object
+      required:
+        - module
+        - menu
+        - columns
+      properties:
+        module:
+          type: string
+          maxLength: 255
+          description: Module slug, as in the permission tree (e.g. `customer-manage`).
+          example: customer-manage
+        menu:
+          type: string
+          maxLength: 255
+          description: Menu slug, as in the permission tree (e.g. `customer-group`).
+          example: customer-group
+        columns:
+          type: array
+          description: Visible columns, in this order. May be empty (`[]`).
+          items:
+            type: string
+            maxLength: 255
+          example: [id, name, status]
 
     Branch:
       type: object
@@ -23684,8 +24000,8 @@ components:
           example: Wholesale
         status:
           type: string
-          enum: [Approved, Inactive, Pending, Cancel]
-          example: Approved
+          enum: [Active, Inactive, Pending, Cancel]
+          example: Active
         created_at:
           type: [string, "null"]
           format: date-time
@@ -23696,9 +24012,7 @@ components:
       minLength: 2
       maxLength: 100
       description: |
-        Rules come from the customer group form settings (same as the web form), plus a 100-character
-        limit (the size of the database column). Must be unique within the logged-in user's
-        company (not case-sensitive, soft-deleted customer groups not counted).
+        Same rules as the web form: required, 2–100 characters. Not checked for uniqueness.
       example: Wholesale Partner
 
     CustomerMedia:
@@ -28773,8 +29087,17 @@ components:
                 errors:
                   name:
                     - The name field is required.
-            duplicateName:
-              summary: Name already used by another customer group of the company
+            shortName:
+              summary: Name shorter than 2 characters
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name must be at least 2 characters. "
+                errors:
+                  name:
+                    - The name must be at least 2 characters.
+            nameTaken:
+              summary: Name already used by another customer group
               value:
                 code: 422
                 success: false
@@ -28782,8 +29105,17 @@ components:
                 errors:
                   name:
                     - The name has already been taken.
+            nameNotString:
+              summary: Name is not a string (e.g. an array)
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name must be a string. "
+                errors:
+                  name:
+                    - The name must be a string.
             invalidStatus:
-              summary: Update only — status missing or not Approved / Inactive / Pending / Cancel
+              summary: Update only — status missing or not Active / Inactive / Pending / Cancel
               value:
                 code: 422
                 success: false
