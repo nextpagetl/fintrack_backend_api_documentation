@@ -5225,7 +5225,8 @@ paths:
         - `name` must be a string.
         - `name` must be unique among the customer groups (case-insensitive; soft-deleted groups are
           not counted, so a deleted group's name can be used again). The web form does not check this.
-        - `status` is always saved as `Active`, even if another value is sent.
+        - `status` is required and is saved as sent (`Active`, `Inactive`, `Pending` or `Cancel`).
+          The web form always saves `Active`; only the API takes the status from the body.
 
         Required permission: `module:customer-manage.menu:customer-group.permission:create`
       operationId: createCustomerGroup
@@ -5244,9 +5245,14 @@ paths:
               type: object
               required:
                 - name
+                - status
               properties:
                 name:
                   $ref: "#/components/schemas/CustomerGroupName"
+                status:
+                  type: string
+                  enum: [Active, Inactive, Pending, Cancel]
+                  example: Active
 
       responses:
         "201":
@@ -29305,7 +29311,7 @@ components:
                   name:
                     - The name must be a string.
             invalidStatus:
-              summary: Update only — status missing or not Active / Inactive / Pending / Cancel
+              summary: Status not Active / Inactive / Pending / Cancel
               value:
                 code: 422
                 success: false
@@ -29313,6 +29319,15 @@ components:
                 errors:
                   status:
                     - The selected status is invalid.
+            missingStatus:
+              summary: Status missing
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The status field is required. "
+                errors:
+                  status:
+                    - The status field is required.
 
     CustomerMediaNotFound:
       description: No customer media with this ID in the logged-in user's company, or a non-numeric or soft-deleted ID.
