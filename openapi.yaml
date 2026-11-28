@@ -881,11 +881,15 @@ paths:
         has no config for this menu, all default columns are exported. When the user's `columns`
         for this menu is empty (`[]`), nothing is exported (`422`).
 
+        The `id` column (heading `SL`) shows the serial number in the file (1, 2, 3 ... in file
+        order), not the database id. `from_id` / `to_id` still filter by the database id.
+
         **Exportable menus:**
 
-        | module | menu | API list | Default columns |
+        | module | menu | API list | Columns (heading) |
         |---|---|---|---|
-        | `customer-manage` | `customer-group` | `GET /customer-groups` | `id`, `name`, `status`, `created_at` |
+        | `customer-manage` | `customer-group` | `GET /customer-groups` | `id` (SL), `name` (Name), `status` (Status) |
+        | `system-configuration` | `user-role` | `GET /roles` | `id` (SL), `name` (Name), `status` (Status) |
 
         Any other `module` + `menu` returns `422`.
 
@@ -944,6 +948,12 @@ paths:
           description: Passed to the menu's list (same as the list's `search`).
           schema:
             type: string
+        - name: status
+          in: query
+          description: Passed to the menu's list when the list has a `status` filter (e.g. `GET /roles`).
+          schema:
+            type: string
+          example: Active
         - name: sort_by
           in: query
           description: Passed to the menu's list (same values as the list's `sort_by`).
@@ -962,7 +972,8 @@ paths:
         "200":
           description: |
             File download (`Content-Disposition: attachment`). File name:
-            `<file_name>-<YYYY-MM-DD>.<xlsx|csv|pdf>`, e.g. `customer-groups-2026-11-26.xlsx`.
+            `<file_name>-<YYYY-MM-DD>.<xlsx|csv|pdf>`, e.g. `customer-groups-2026-11-26.xlsx`
+            or `user-roles-2026-11-26.xlsx`.
             The first row has the column headings.
           content:
             application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
@@ -5271,6 +5282,185 @@ paths:
 
         "422":
           $ref: "#/components/responses/CustomerGroupValidationError"
+
+  /customer-groups/import:
+    post:
+      tags:
+        - Customer Groups
+      summary: Bulk import customer groups (Excel)
+      description: |
+        Imports customer groups for the logged-in user's company from an Excel file (API version of the
+        web import `admin/sales-setup-customer-group-import`). The file must follow the demo file:
+        [customerGroup.xlsx](https://backend-fintrack360.eduguard360.com/backend/assets/excelFormat/salesSetup/customerGroup/customerGroup.xlsx)
+
+        | name | status |
+        |---|---|
+        | Wholesale | Active |
+        | Retail | Inactive |
+
+        - **First row is the header** and must be exactly `name`, `status` (lowercase, this order, no
+          other columns). It is not imported.
+        - Data rows start from row 2. Completely empty rows are skipped. At least 1 and at most 1000 data rows.
+        - `name`: required, 2–100 characters, unique among the customer groups (case-insensitive;
+          soft-deleted groups are not counted) and not repeated in the file.
+        - `status`: **required**, exactly one of `Active`, `Inactive`, `Pending`, `Cancel` (case-sensitive).
+          An empty or other value (e.g. `active`, `Approved`) is an error.
+        - No data after column B.
+
+        **All or nothing:** every row is checked first; if any row is wrong, nothing is saved and `422`
+        lists the wrong rows as `row_<N>`, where `<N>` is the row number as Excel shows it (the header is
+        row 1). `created_by` is the logged-in user.
+
+        Required permission: `module:customer-manage.menu:customer-group.permission:create`
+      operationId: importCustomerGroups
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - importFile
+              properties:
+                importFile:
+                  type: string
+                  format: binary
+                  description: An `xlsx` or `xls` file in the demo file's format, at most 2 MB. CSV is not accepted.
+
+      responses:
+        "201":
+          description: All rows imported
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          imported:
+                            type: integer
+                            description: Number of customer groups imported.
+              example:
+                code: 201
+                success: true
+                message: 5 customer groups imported successfully.
+                data:
+                  imported: 5
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: |
+            The file is missing / wrong type / too large, its format does not match the demo file, or one
+            or more rows are wrong. Nothing is saved. File problems are under `errors.importFile`; row
+            problems under `errors.row_<N>`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              examples:
+                missing:
+                  summary: No file sent
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The import file field is required. "
+                    errors:
+                      importFile:
+                        - The import file field is required.
+                wrongType:
+                  summary: Not an xlsx / xls file (e.g. csv)
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The import file must be a file of type: xlsx, xls. "
+                    errors:
+                      importFile:
+                        - "The import file must be a file of type: xlsx, xls."
+                tooLarge:
+                  summary: Larger than 2 MB
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The import file must not be greater than 2048 kilobytes. "
+                    errors:
+                      importFile:
+                        - The import file must not be greater than 2048 kilobytes.
+                invalidFormat:
+                  summary: First row is not exactly "name, status" (wrong / missing header, extra column)
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. Invalid file format. First row must be: name, status (see the demo file). "
+                    errors:
+                      importFile:
+                        - "Invalid file format. First row must be: name, status (see the demo file)."
+                noRows:
+                  summary: Header only, no data rows
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. No data rows found in the file. "
+                    errors:
+                      importFile:
+                        - No data rows found in the file.
+                tooManyRows:
+                  summary: More than 1000 data rows
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. Maximum 1000 rows can be imported at once. "
+                    errors:
+                      importFile:
+                        - Maximum 1000 rows can be imported at once.
+                rowErrors:
+                  summary: Wrong rows (status empty / invalid, name problems, extra column data)
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The status field is required. The status must be one of: Active, Inactive, Pending, Cancel. The name field is required. The name has already been taken. The name is duplicated in the file (row 6). Invalid file format. Only name and status columns are allowed. "
+                    errors:
+                      row_2:
+                        - The status field is required.
+                      row_3:
+                        - "The status must be one of: Active, Inactive, Pending, Cancel."
+                      row_4:
+                        - The name field is required.
+                      row_5:
+                        - The name has already been taken.
+                      row_7:
+                        - The name is duplicated in the file (row 6).
+                      row_8:
+                        - Invalid file format. Only name and status columns are allowed.
+
+        "500":
+          description: The file passed validation but saving failed; nothing is saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 500
+                success: false
+                message: "SQLSTATE[HY000]: General error"
+                errors: []
 
   /customer-groups/{id}:
     put:
