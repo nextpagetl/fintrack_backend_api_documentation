@@ -6211,7 +6211,9 @@ paths:
             type: integer
         - name: status
           in: query
-          description: Only customers with this status.
+          description: |
+            Optional. Only customers with this status; when not sent (or empty) every status is
+            listed. Any other value returns `422`.
           schema:
             type: string
             enum: [Approved, Inactive, Pending, Cancel]
@@ -6272,7 +6274,7 @@ paths:
                     - id: 5
                       company_id: 1
                       code: CUST0005
-                      name: Test Customer
+                      name: test
                       contact_person: Test Contact
                       customer_type: 1
                       customer_group:
@@ -6327,16 +6329,34 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+        "422":
+          description: "`status` is not `Approved` / `Inactive` / `Pending` / `Cancel`."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
+
     post:
       tags:
         - Customers
       summary: Create customer
       description: |
         Creates a customer (API version of the web form `admin/sales-setup-customer-create`). The
-        validation rules are the same as the web form, read from the customer form settings, plus
-        existing related records and the column lengths — see `CustomerRequest`.
+        validation rules are written in the API (the same rules as the web form: `name` required,
+        2–100 characters; `customer_type` required; `address` at most 200 characters; the rest
+        optional), plus existing related records and the column lengths — see `CustomerRequest`.
 
-        - `name` and `customer_type` (customer group of the logged-in user's company) are required.
+        - `name` and `customer_type` are required.
+        - `customer_type` (customer group), `media_id` (customer media) and `sr_id` (sales
+          representative, an employee) must be of the logged-in user's company, not soft-deleted
+          and **`Approved`**; an `Inactive` / `Pending` / `Cancel` one returns `422`.
         - `phone` is optional and **not** unique (same as the web form).
         - `code` is saved as sent; it is not generated.
         - `branch_id` defaults to the company's default branch when not sent.
@@ -6344,6 +6364,8 @@ paths:
           `district_id` and `union_id` of `upazila_id`; a lower level needs the level above it.
         - `status` is optional: `Approved` when not sent; when sent it must be `Approved`,
           `Inactive`, `Pending` or `Cancel` and cannot be empty.
+        - Saving and the sent `status` are done together (one transaction): if any part fails,
+          nothing is saved.
 
         `company_id` is set to the logged-in user's company.
 
@@ -6368,7 +6390,7 @@ paths:
                     - name
                     - customer_type
             example:
-              name: Sample Customer
+              name: test
               customer_type: 1
               code: CUST0006
               phone: "01700000012"
@@ -6402,7 +6424,7 @@ paths:
                   id: 1737
                   company_id: 1
                   code: CUST0006
-                  name: Sample Customer
+                  name: test
                   contact_person: null
                   customer_type: 1
                   customer_group:
@@ -6471,7 +6493,9 @@ paths:
         - A field sent **empty** (`""` or `null`) is saved as `null`. `name` and `customer_type`
           are required, so sending them empty returns `422`. An empty `branch_id` becomes the
           company's default branch (same as the web form).
-        - Sent fields use the same rules as create.
+        - Sent fields use the same rules as create. One exception: `customer_type`, `media_id`
+          and `sr_id` may also be the customer's **current** one even if it is no longer
+          `Approved` (so it can be kept); a different one must be `Approved`.
         - When any location field (`division_id`, `district_id`, `upazila_id`, `union_id`) is
           sent, the resulting location — sent values, or the current ones — must fit together.
           For example, changing only `division_id` fails when the current district is not of the
@@ -6479,7 +6503,9 @@ paths:
         - `status` is changed only when sent (`Approved`, `Inactive`, `Pending` or `Cancel`;
           cannot be empty); otherwise the current status is kept.
         - `company_id` is set to the logged-in user's company (the customer is already of that
-          company).
+          company). `updated_by` is the logged-in user.
+        - Saving and the status are done together (one transaction): if any part fails, nothing
+          is saved.
 
         Required permission: `module:customer-manage.menu:customer.permission:edit`
       operationId: updateCustomer
@@ -6541,7 +6567,7 @@ paths:
                   id: 5
                   company_id: 1
                   code: CUST0005
-                  name: Test Customer
+                  name: test
                   contact_person: Test Contact
                   customer_type: 1
                   customer_group:
@@ -6605,8 +6631,9 @@ paths:
         - Customers
       summary: Delete customer
       description: |
-        Soft-deletes a customer (`deleted_at` is set; the row stays in the database). A deleted
-        customer is no longer listed and returns `404` on every other endpoint.
+        Soft-deletes a customer (`deleted_at` is set and `deleted_by` is set to the logged-in
+        user, together in one transaction; the row stays in the database). A deleted customer is
+        no longer listed and returns `404` on every other endpoint.
 
         The customer cannot be deleted (`409`) when any of these tables still uses it
         (`customer_id`; soft-deleted rows are not counted); `errors.used_in` lists which:
@@ -6682,7 +6709,8 @@ paths:
         - Customers
       summary: Change customer status
       description: |
-        Sets the customer's status to `Approved` or `Inactive`. Only the status changes.
+        Sets the customer's status to `Approved` or `Inactive`. Only the status and `updated_by`
+        (the logged-in user) change, together in one transaction.
 
         Required permission: `module:customer-manage.menu:customer.permission:change-status`
       operationId: updateCustomerStatus
@@ -24307,7 +24335,7 @@ components:
           example: CUST0005
         name:
           type: [string, "null"]
-          example: Test Customer
+          example: test
         contact_person:
           type: [string, "null"]
           example: Test Contact
@@ -24387,8 +24415,8 @@ components:
     CustomerRequest:
       type: object
       description: |
-        Customer fields. Rules come from the customer form settings (same as the web form), plus
-        existing related records, the column lengths and a location chain that fits together.
+        Customer fields. Rules are written in the API (same as the web form), plus existing
+        related records, the column lengths and a location chain that fits together.
         `name` and `customer_type` are required on create; on update every field is optional
         (see the endpoint).
       properties:
@@ -24396,10 +24424,12 @@ components:
           type: string
           minLength: 2
           maxLength: 100
-          example: Sample Customer
+          example: test
         customer_type:
           type: integer
-          description: Customer group of the logged-in user's company (not soft-deleted).
+          description: |
+            An `Approved` customer group of the logged-in user's company (not soft-deleted). On
+            update the customer's current group is also accepted.
           example: 1
         code:
           type: [string, "null"]
@@ -24446,11 +24476,15 @@ components:
           example: 1
         media_id:
           type: [integer, "null"]
-          description: Customer media of the logged-in user's company (not soft-deleted).
+          description: |
+            An `Approved` customer media of the logged-in user's company (not soft-deleted). On
+            update the customer's current media is also accepted.
           example: 1
         sr_id:
           type: [integer, "null"]
-          description: Sales representative — an employee of the logged-in user's company (not soft-deleted).
+          description: |
+            Sales representative — an `Approved` employee of the logged-in user's company (not
+            soft-deleted). On update the customer's current one is also accepted.
           example: 3
         division_id:
           type: [integer, "null"]
@@ -29499,7 +29533,7 @@ components:
                   upazila_id:
                     - The upazila id field is required when union id is present.
             invalidSalesRepresentative:
-              summary: Sales representative does not exist or is of another company
+              summary: Sales representative does not exist, is of another company or is not Approved
               value:
                 code: 422
                 success: false
@@ -29507,6 +29541,24 @@ components:
                 errors:
                   sr_id:
                     - The selected sr id is invalid.
+            groupNotApproved:
+              summary: Customer group does not exist, is of another company or is not Approved
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected customer type is invalid. "
+                errors:
+                  customer_type:
+                    - The selected customer type is invalid.
+            mediaNotApproved:
+              summary: Customer media does not exist, is of another company or is not Approved
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected media id is invalid. "
+                errors:
+                  media_id:
+                    - The selected media id is invalid.
             invalidStatus:
               summary: Status empty or not Approved / Inactive / Pending / Cancel
               value:
