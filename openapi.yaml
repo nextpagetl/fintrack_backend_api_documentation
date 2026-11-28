@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.30.0
+  version: 1.31.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -5838,9 +5838,9 @@ paths:
         Paginated list of the logged-in user's company customer media — the sources a customer can
         come from, saved in `customers.media_id` (the same company filter as the web list
         `admin/sales-setup-customer-media-list`; this also applies to the super admin).
-        Soft-deleted customer media are not listed. Only the customer media with the sent `status`
-        (required) are listed. The customer media are in `data.items` and the pagination info in
-        `data.pagination`.
+        Soft-deleted customer media are not listed. `status` is optional: when sent, only the customer
+        media with that status are listed; when not sent (or empty), all statuses are listed. The
+        customer media are in `data.items` and the pagination info in `data.pagination`.
 
         Required permission: `module:customer-manage.menu:customer-media.permission:view`
       operationId: listCustomerMedia
@@ -5851,8 +5851,8 @@ paths:
       parameters:
         - name: status
           in: query
-          required: true
-          description: Only customer media with this status are listed.
+          required: false
+          description: Optional. Only customer media with this status are listed; not sent or empty = all statuses.
           schema:
             type: string
             enum: [Approved, Inactive, Pending, Cancel]
@@ -5917,15 +5917,20 @@ paths:
                 message: List Data
                 data:
                   items:
+                    - id: 2
+                      company_id: 1
+                      name: Test Media Two
+                      status: Inactive
+                      created_at: "2025-01-19T09:30:00.000000Z"
                     - id: 1
                       company_id: 1
-                      name: test
+                      name: Test Media
                       status: Approved
                       created_at: "2025-01-18T10:02:07.000000Z"
                   pagination:
                     current_page: 1
                     per_page: 10
-                    total: 1
+                    total: 2
                     last_page: 1
 
         "401":
@@ -5935,30 +5940,18 @@ paths:
           $ref: "#/components/responses/Forbidden"
 
         "422":
-          description: Status is missing or not `Approved` / `Inactive` / `Pending` / `Cancel`.
+          description: Status is sent but is not `Approved` / `Inactive` / `Pending` / `Cancel`.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ValidationErrorEnvelope"
-              examples:
-                missingStatus:
-                  summary: Status missing
-                  value:
-                    code: 422
-                    success: false
-                    message: "Validation Failed. The status field is required. "
-                    errors:
-                      status:
-                        - The status field is required.
-                invalidStatus:
-                  summary: Status not Approved / Inactive / Pending / Cancel
-                  value:
-                    code: 422
-                    success: false
-                    message: "Validation Failed. The selected status is invalid. "
-                    errors:
-                      status:
-                        - The selected status is invalid.
+              example:
+                code: 422
+                success: false
+                message: "Validation Failed. The selected status is invalid. "
+                errors:
+                  status:
+                    - The selected status is invalid.
 
     post:
       tags:
