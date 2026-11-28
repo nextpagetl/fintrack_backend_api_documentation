@@ -5195,7 +5195,7 @@ paths:
                     - id: 2
                       company_id: 1
                       name: Wholesale
-                      status: Active
+                      status: Approved
                       created_at: "2026-11-09T10:20:00.000000Z"
                     - id: 1
                       company_id: 1
@@ -5225,8 +5225,8 @@ paths:
         - `name` must be a string.
         - `name` must be unique among the customer groups (case-insensitive; soft-deleted groups are
           not counted, so a deleted group's name can be used again). The web form does not check this.
-        - `status` is required and is saved as sent (`Active`, `Inactive`, `Pending` or `Cancel`).
-          The web form always saves `Active`; only the API takes the status from the body.
+        - `status` is required and is saved as sent (`Approved`, `Inactive`, `Pending` or `Cancel`).
+          The web form always saves `Approved`; only the API takes the status from the body.
 
         Required permission: `module:customer-manage.menu:customer-group.permission:create`
       operationId: createCustomerGroup
@@ -5251,8 +5251,8 @@ paths:
                   $ref: "#/components/schemas/CustomerGroupName"
                 status:
                   type: string
-                  enum: [Active, Inactive, Pending, Cancel]
-                  example: Active
+                  enum: [Approved, Inactive, Pending, Cancel]
+                  example: Approved
 
       responses:
         "201":
@@ -5274,7 +5274,7 @@ paths:
                   id: 3
                   company_id: 1
                   name: Wholesale Partner
-                  status: Active
+                  status: Approved
                   created_at: "2026-11-09T10:30:00.000000Z"
 
         "401":
@@ -5301,7 +5301,7 @@ paths:
 
         | name | status |
         |---|---|
-        | Wholesale | Active |
+        | Wholesale | Approved |
         | Retail | Inactive |
 
         - **First row is the header** and must be exactly `name`, `status` (lowercase, this order, no
@@ -5309,8 +5309,8 @@ paths:
         - Data rows start from row 2. Completely empty rows are skipped. At least 1 and at most 1000 data rows.
         - `name`: required, 2–100 characters, unique among the customer groups (case-insensitive;
           soft-deleted groups are not counted) and not repeated in the file.
-        - `status`: **required**, exactly one of `Active`, `Inactive`, `Pending`, `Cancel` (case-sensitive).
-          An empty or other value (e.g. `active`, `Approved`) is an error.
+        - `status`: **required**, exactly one of `Approved`, `Inactive`, `Pending`, `Cancel` (case-sensitive).
+          An empty or other value (e.g. `approved`, `Active`) is an error.
         - No data after column B.
 
         **All or nothing:** every row is checked first; if any row is wrong, nothing is saved and `422`
@@ -5441,12 +5441,12 @@ paths:
                   value:
                     code: 422
                     success: false
-                    message: "Validation Failed. The status field is required. The status must be one of: Active, Inactive, Pending, Cancel. The name field is required. The name has already been taken. The name is duplicated in the file (row 6). Invalid file format. Only name and status columns are allowed. "
+                    message: "Validation Failed. The status field is required. The status must be one of: Approved, Inactive, Pending, Cancel. The name field is required. The name has already been taken. The name is duplicated in the file (row 6). Invalid file format. Only name and status columns are allowed. "
                     errors:
                       row_2:
                         - The status field is required.
                       row_3:
-                        - "The status must be one of: Active, Inactive, Pending, Cancel."
+                        - "The status must be one of: Approved, Inactive, Pending, Cancel."
                       row_4:
                         - The name field is required.
                       row_5:
@@ -5480,7 +5480,7 @@ paths:
         (case-insensitive; soft-deleted groups and this group are not counted, so keeping the same name
         is fine). `status` is required.
 
-        - `status` is taken from the body (`Active`, `Inactive`, `Pending` or `Cancel`).
+        - `status` is taken from the body (`Approved`, `Inactive`, `Pending` or `Cancel`).
         - `company_id` is set to the logged-in user's company.
 
         Required permission: `module:customer-manage.menu:customer-group.permission:edit`
@@ -5507,7 +5507,7 @@ paths:
                   $ref: "#/components/schemas/CustomerGroupName"
                 status:
                   type: string
-                  enum: [Active, Inactive, Pending, Cancel]
+                  enum: [Approved, Inactive, Pending, Cancel]
                   example: Inactive
 
       responses:
@@ -5625,7 +5625,7 @@ paths:
         - Customer Groups
       summary: Change customer group status
       description: |
-        Sets the customer group's status to `Active`, `Inactive`, `Pending` or `Cancel` (the values of
+        Sets the customer group's status to `Approved`, `Inactive`, `Pending` or `Cancel` (the values of
         the `customer_groups.status` column, same as `PUT /customer-groups/{id}`).
 
         Required permission: `module:customer-manage.menu:customer-group.permission:change-status`
@@ -5649,7 +5649,7 @@ paths:
               properties:
                 status:
                   type: string
-                  enum: [Active, Inactive, Pending, Cancel]
+                  enum: [Approved, Inactive, Pending, Cancel]
                   example: Inactive
 
       responses:
@@ -5688,7 +5688,7 @@ paths:
           $ref: "#/components/responses/CsrfMismatch"
 
         "422":
-          description: Status is missing or not `Active` / `Inactive` / `Pending` / `Cancel`.
+          description: Status is missing or not `Approved` / `Inactive` / `Pending` / `Cancel`.
           content:
             application/json:
               schema:
@@ -5710,8 +5710,9 @@ paths:
         Paginated list of the logged-in user's company customer media — the sources a customer can
         come from, saved in `customers.media_id` (the same company filter as the web list
         `admin/sales-setup-customer-media-list`; this also applies to the super admin).
-        Soft-deleted customer media are not listed. The customer media are in `data.items` and the
-        pagination info in `data.pagination`.
+        Soft-deleted customer media are not listed. Only the customer media with the sent `status`
+        (required) are listed. The customer media are in `data.items` and the pagination info in
+        `data.pagination`.
 
         Required permission: `module:customer-manage.menu:customer-media.permission:view`
       operationId: listCustomerMedia
@@ -5720,12 +5721,20 @@ paths:
         - sessionCookie: []
 
       parameters:
+        - name: status
+          in: query
+          required: true
+          description: Only customer media with this status are listed.
+          schema:
+            type: string
+            enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
         - name: search
           in: query
           description: Partial match on ID, name or status.
           schema:
             type: string
-          example: Office
+          example: test
         - name: per_page
           in: query
           description: Items per page (1–100). Any other value falls back to `10`.
@@ -5782,7 +5791,7 @@ paths:
                   items:
                     - id: 1
                       company_id: 1
-                      name: Office
+                      name: test
                       status: Approved
                       created_at: "2025-01-18T10:02:07.000000Z"
                   pagination:
@@ -5797,19 +5806,45 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+        "422":
+          description: Status is missing or not `Approved` / `Inactive` / `Pending` / `Cancel`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              examples:
+                missingStatus:
+                  summary: Status missing
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The status field is required. "
+                    errors:
+                      status:
+                        - The status field is required.
+                invalidStatus:
+                  summary: Status not Approved / Inactive / Pending / Cancel
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The selected status is invalid. "
+                    errors:
+                      status:
+                        - The selected status is invalid.
+
     post:
       tags:
         - Customer Media
       summary: Create customer media
       description: |
-        Creates a customer media for the logged-in user's company. The validation rules are the same
-        as the web form (`admin/sales-setup-customer-media-create`), read from the customer media form
-        settings.
+        Creates a customer media for the logged-in user's company. `name` has the web form's rules
+        (`admin/sales-setup-customer-media-create`: required, 2–100 characters), plus:
 
-        - `status` is always saved as `Approved`, even if another value is sent.
-        - `name` must be unique in the **whole table** — across all companies, and soft-deleted
-          customer media are counted too (not case-sensitive). The `customer_media.name` column
-          has a unique index, so the name of a deleted customer media cannot be used again.
+        - `name` must be a string.
+        - `name` must be unique among the customer media (case-insensitive; soft-deleted customer
+          media are not counted, so a deleted customer media's name can be used again).
+        - `status` is required and is saved as sent (`Approved`, `Inactive`, `Pending` or `Cancel`).
+          The web form always saves `Approved`; only the API takes the status from the body.
 
         Required permission: `module:customer-manage.menu:customer-media.permission:create`
       operationId: createCustomerMedia
@@ -5828,9 +5863,14 @@ paths:
               type: object
               required:
                 - name
+                - status
               properties:
                 name:
                   $ref: "#/components/schemas/CustomerMediaName"
+                status:
+                  type: string
+                  enum: [Approved, Inactive, Pending, Cancel]
+                  example: Approved
 
       responses:
         "201":
@@ -5851,7 +5891,7 @@ paths:
                 data:
                   id: 2
                   company_id: 1
-                  name: Facebook
+                  name: test
                   status: Approved
                   created_at: "2026-11-10T08:00:18.000000Z"
 
@@ -5877,8 +5917,8 @@ paths:
         `admin/sales-setup-customer-media-edit/{id}`). This is a **full update**: both `name` and
         `status` are required; a request without one of them returns `422` and nothing is saved.
 
-        - `name` must be unique in the whole table (all companies, soft-deleted customer media
-          included, not case-sensitive); the customer media's own name may be kept.
+        - `name` must be a string and unique among the other customer media (case-insensitive;
+          soft-deleted customer media and this one are not counted, so keeping the same name is fine).
         - `status` is taken from the body (`Approved`, `Inactive`, `Pending` or `Cancel`). (The
           web form always saves `Approved`.)
         - `company_id` is set to the logged-in user's company.
@@ -5929,7 +5969,7 @@ paths:
                 data:
                   id: 2
                   company_id: 1
-                  name: Facebook
+                  name: test
                   status: Pending
                   created_at: "2026-11-10T08:00:18.000000Z"
 
@@ -5953,9 +5993,9 @@ paths:
         - Customer Media
       summary: Delete customer media
       description: |
-        Soft-deletes a customer media (`deleted_at` is set; the row stays in the database). A
-        deleted customer media is no longer listed and returns `404` on every other endpoint. Its
-        name **cannot** be used again (see the unique rule on create).
+        Soft-deletes a customer media (`deleted_at` is set and `deleted_by` is set to the logged-in
+        user; the row stays in the database). A deleted customer media is no longer listed and returns
+        `404` on every other endpoint. Its name can be used again.
 
         The customer media cannot be deleted (`409`) when any customer uses it
         (`customers.media_id`; soft-deleted customers are not counted). The web list checks a
@@ -6026,7 +6066,8 @@ paths:
         - Customer Media
       summary: Change customer media status
       description: |
-        Sets the customer media's status to `Approved` or `Inactive`.
+        Sets the customer media's status to `Approved` or `Inactive`. `updated_by` is set to the
+        logged-in user.
 
         Required permission: `module:customer-manage.menu:customer-media.permission:change-status`
       operationId: updateCustomerMediaStatus
@@ -6071,7 +6112,7 @@ paths:
                 data:
                   id: 2
                   company_id: 1
-                  name: Facebook
+                  name: test
                   status: Inactive
                   created_at: "2026-11-10T08:00:18.000000Z"
 
@@ -24196,8 +24237,8 @@ components:
           example: Wholesale
         status:
           type: string
-          enum: [Active, Inactive, Pending, Cancel]
-          example: Active
+          enum: [Approved, Inactive, Pending, Cancel]
+          example: Approved
         created_at:
           type: [string, "null"]
           format: date-time
@@ -24222,7 +24263,7 @@ components:
           example: 1
         name:
           type: [string, "null"]
-          example: Office
+          example: test
         status:
           type: string
           enum: [Approved, Inactive, Pending, Cancel]
@@ -24237,10 +24278,9 @@ components:
       minLength: 2
       maxLength: 100
       description: |
-        Rules come from the customer media form settings (same as the web form): required, 2–100
-        characters. Must be unique in the whole table — all companies, soft-deleted customer media
-        included (not case-sensitive) — because `customer_media.name` has a unique index.
-      example: Facebook
+        Same rules as the web form (required, 2–100 characters), plus a string. Must be unique
+        among the customer media (case-insensitive; soft-deleted customer media are not counted).
+      example: test
 
     NamedRef:
       type: [object, "null"]
@@ -29311,7 +29351,7 @@ components:
                   name:
                     - The name must be a string.
             invalidStatus:
-              summary: Status not Active / Inactive / Pending / Cancel
+              summary: Status not Approved / Inactive / Pending / Cancel
               value:
                 code: 422
                 success: false
@@ -29367,7 +29407,7 @@ components:
                   name:
                     - The name must be at least 2 characters.
             duplicateName:
-              summary: Name already used (any company, including deleted customer media)
+              summary: Name already used by another customer media (deleted ones not counted)
               value:
                 code: 422
                 success: false
@@ -29375,8 +29415,17 @@ components:
                 errors:
                   name:
                     - The name has already been taken.
+            nameNotString:
+              summary: Name is not a string (e.g. an array)
+              value:
+                code: 422
+                success: false
+                message: "Validation Failed. The name must be a string. "
+                errors:
+                  name:
+                    - The name must be a string.
             missingStatus:
-              summary: Update only — status missing
+              summary: Status missing
               value:
                 code: 422
                 success: false
@@ -29385,7 +29434,7 @@ components:
                   status:
                     - The status field is required.
             invalidStatus:
-              summary: Update only — status not Approved / Inactive / Pending / Cancel
+              summary: Status not Approved / Inactive / Pending / Cancel
               value:
                 code: 422
                 success: false
