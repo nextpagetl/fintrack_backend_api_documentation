@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.31.0
+  version: 1.32.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -1062,12 +1062,15 @@ paths:
 
         ### menu `customer`
 
-        | code | name | customer_group | contact_person | phone | email | address | branch | customer_media | sales_representative | division | district | thana | union | tax_identification_number | credit_limit | status |
-        |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-        | C-001 | Test Customer Ltd | Test Wholesale | Test Contact | 01700000000 | test.customer@example.com | Test Road 1, Dhaka | Test Branch Main | Test Media | Test Sales User | Chattagram | Comilla | Test Thana | Test Union | TIN-001 | 50000 | Approved |
+        | name | customer_group | contact_person | phone | email | address | branch | customer_media | sales_representative | division | district | thana | union | tax_identification_number | credit_limit | status |
+        |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+        | Test Customer Ltd | Test Wholesale | Test Contact | 01700000000 | test.customer@example.com | Test Road 1, Dhaka | Test Branch Main | Test Media | Test Sales User | Chattagram | Comilla | Test Thana | Test Union | TIN-001 | 50000 | Approved |
 
-        - **First row is the header** and must be exactly the 17 columns above (lowercase, this order,
-          no other columns). It is not imported. No data after column Q.
+        - **First row is the header** and must be exactly the 16 columns above (lowercase, this order,
+          no other columns). It is not imported. No data after column P.
+        - **No `code` column:** each customer's code is made by the backend when the row is saved
+          (same as `POST /customers`), one after another (e.g. `CUID00001739`, `CUID00001740` ...).
+          A file with a `code` column (the old 17-column format) returns `422`.
         - Same rules as `POST /customers`: `name` required (2–100 characters), `customer_group` required,
           `phone` max 20, `email` a valid email (max 55), `address` max 200, `credit_limit` a number ≥ 0;
           the other columns are optional.
@@ -1232,14 +1235,14 @@ paths:
                       importFile:
                         - The import file must not be greater than 2048 kilobytes.
                 invalidFormatCustomer:
-                  summary: "customer: first row is not exactly the 17 demo columns"
+                  summary: "customer: first row is not exactly the 16 demo columns (e.g. old file with a code column)"
                   value:
                     code: 422
                     success: false
-                    message: "Validation Failed. Invalid file format. First row must be: code, name, customer_group, contact_person, phone, email, address, branch, customer_media, sales_representative, division, district, thana, union, tax_identification_number, credit_limit, status (see the demo file). "
+                    message: "Validation Failed. Invalid file format. First row must be: name, customer_group, contact_person, phone, email, address, branch, customer_media, sales_representative, division, district, thana, union, tax_identification_number, credit_limit, status (see the demo file). "
                     errors:
                       importFile:
-                        - "Invalid file format. First row must be: code, name, customer_group, contact_person, phone, email, address, branch, customer_media, sales_representative, division, district, thana, union, tax_identification_number, credit_limit, status (see the demo file)."
+                        - "Invalid file format. First row must be: name, customer_group, contact_person, phone, email, address, branch, customer_media, sales_representative, division, district, thana, union, tax_identification_number, credit_limit, status (see the demo file)."
                 invalidFormatCustomerGroup:
                   summary: "customer-group: first row is not exactly \"name, status\""
                   value:
@@ -6394,8 +6397,8 @@ paths:
                   items:
                     - id: 5
                       company_id: 1
-                      code: CUST0005
-                      name: test
+                      code: CUID00000005
+                      name: Test Customer Ltd
                       contact_person: Test Contact
                       customer_type: 1
                       customer_group:
@@ -6479,7 +6482,9 @@ paths:
           representative, an employee) must be of the logged-in user's company, not soft-deleted
           and **`Approved`**; an `Inactive` / `Pending` / `Cancel` one returns `422`.
         - `phone` is optional and **not** unique (same as the web form).
-        - `code` is saved as sent; it is not generated.
+        - **`code` is made by the backend** (same as the web create form): the General Setup
+          `customer_prefix` + the next customer number, padded to `voucher_length` digits
+          (e.g. `CUID00001739`). Do not send it; a sent `code` is ignored.
         - `branch_id` defaults to the company's default branch when not sent.
         - The location must fit together: `district_id` must be of `division_id`, `upazila_id` of
           `district_id` and `union_id` of `upazila_id`; a lower level needs the level above it.
@@ -6511,11 +6516,10 @@ paths:
                     - name
                     - customer_type
             example:
-              name: test
+              name: Test Customer Ltd
               customer_type: 1
-              code: CUST0006
               phone: "01700000012"
-              email: sample.customer@example.com
+              email: test.customer@example.com
               address: Test Road 2, Test City
               credit_limit: 10000
               sr_id: 3
@@ -6542,10 +6546,10 @@ paths:
                 success: true
                 message: Customer created successfully.
                 data:
-                  id: 1737
+                  id: 1739
                   company_id: 1
-                  code: CUST0006
-                  name: test
+                  code: CUID00001739
+                  name: Test Customer Ltd
                   contact_person: null
                   customer_type: 1
                   customer_group:
@@ -6623,6 +6627,8 @@ paths:
           new division; send the new `district_id` (and lower levels) too, or empty them.
         - `status` is changed only when sent (`Approved`, `Inactive`, `Pending` or `Cancel`;
           cannot be empty); otherwise the current status is kept.
+        - **`code` cannot be changed** (same as the web edit form); a sent `code` is ignored and the
+          current code is kept.
         - `company_id` is set to the logged-in user's company (the customer is already of that
           company). `updated_by` is the logged-in user.
         - Saving and the status are done together (one transaction): if any part fails, nothing
@@ -6687,8 +6693,8 @@ paths:
                 data:
                   id: 5
                   company_id: 1
-                  code: CUST0005
-                  name: test
+                  code: CUID00000005
+                  name: Test Customer Ltd
                   contact_person: Test Contact
                   customer_type: 1
                   customer_group:
@@ -24453,7 +24459,8 @@ components:
           example: 1
         code:
           type: [string, "null"]
-          example: CUST0005
+          description: Made by the backend on create (`customer_prefix` + number); cannot be changed. `null` for some older customers.
+          example: CUID00000005
         name:
           type: [string, "null"]
           example: test
@@ -24552,11 +24559,6 @@ components:
             An `Approved` customer group of the logged-in user's company (not soft-deleted). On
             update the customer's current group is also accepted.
           example: 1
-        code:
-          type: [string, "null"]
-          maxLength: 255
-          description: Saved as sent; not generated.
-          example: CUST0006
         contact_person:
           type: [string, "null"]
           maxLength: 255
