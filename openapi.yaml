@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.29.0
+  version: 1.30.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -1512,6 +1512,8 @@ paths:
                       name: Test Manager
                       status: Active
                       created_at: "2026-11-05T10:15:00.000000Z"
+                      created_by: { id: 2, name: Test User }
+                      updated_by: { id: 8, name: Test Editor }
                       permissions:
                         module:
                           system-configuration:
@@ -1524,6 +1526,8 @@ paths:
                       name: Test Viewer
                       status: Inactive
                       created_at: "2026-11-05T10:20:00.000000Z"
+                      created_by: null
+                      updated_by: null
                       permissions:
                         module: {}
                   meta:
@@ -1544,6 +1548,7 @@ paths:
       summary: Create role
       description: |
         Creates a role (guard `web`) and gives it the listed permissions.
+        `created_by` is the logged-in user.
 
         Required permission: `module:system-configuration.menu:user-role.permission:create`
       operationId: createRole
@@ -1582,6 +1587,8 @@ paths:
                   name: Test Manager
                   status: Active
                   created_at: "2026-11-05T10:15:00.000000Z"
+                  created_by: { id: 2, name: Test User }
+                  updated_by: null
                   permissions:
                     module:
                       system-configuration:
@@ -1633,6 +1640,7 @@ paths:
         Updates the role's name and status and **replaces** its permissions with the list sent.
         If `permissions` is missing or `[]`, all of the role's permissions are removed, so always
         send the full list. If `status` is missing, the current status is kept.
+        `updated_by` is the logged-in user.
 
         Required permission: `module:system-configuration.menu:user-role.permission:edit`
       operationId: updateRole
@@ -1672,6 +1680,8 @@ paths:
                   name: Test Manager Updated
                   status: Active
                   created_at: "2026-11-05T10:15:00.000000Z"
+                  created_by: { id: 2, name: Test User }
+                  updated_by: { id: 8, name: Test Editor }
                   permissions:
                     module:
                       system-configuration:
@@ -1702,8 +1712,15 @@ paths:
         - Roles
       summary: Change role status
       description: |
-        Sets the role's status to `Active` or `Inactive`. Only the stored value changes;
-        users with an `Inactive` role keep their permissions.
+        Sets the role's status to `Active` or `Inactive`. `updated_by` is the logged-in user.
+
+        **An `Inactive` role gives no permission:** from the next request, users with this role
+        get `403` on every endpoint that needs one of the role's permissions (and lose the branch
+        access it gives). The role keeps its permissions, so setting it `Active` again gives them
+        back. An `Inactive` role cannot be given to a user (`POST /users`, `PUT /users/{id}`).
+
+        The `superadmin` role cannot be changed (`404`); a `superadmin` user always keeps full access.
+        The `admin` role cannot be changed (`403`).
 
         Required permission: `module:system-configuration.menu:user-role.permission:change-status`
       operationId: updateRoleStatus
@@ -1750,8 +1767,14 @@ paths:
                   name: Test Manager
                   status: Inactive
                   created_at: "2026-11-05T10:15:00.000000Z"
+                  created_by: { id: 2, name: Test User }
+                  updated_by: { id: 8, name: Test Editor }
                   permissions:
-                    module: {}
+                    module:
+                      system-configuration:
+                        menu:
+                          user:
+                            permission: [view]
 
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -26343,8 +26366,28 @@ components:
           type: [string, "null"]
           format: date-time
           example: "2026-11-05T10:15:00.000000Z"
+        created_by:
+          description: User who created the role (`null` for seeded / older roles).
+          oneOf:
+            - $ref: "#/components/schemas/RoleUserRef"
+            - type: "null"
+        updated_by:
+          description: User who last changed the role (name, status or permissions); `null` if never changed through the API.
+          oneOf:
+            - $ref: "#/components/schemas/RoleUserRef"
+            - type: "null"
         permissions:
           $ref: "#/components/schemas/PermissionTree"
+
+    RoleUserRef:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 2
+        name:
+          type: string
+          example: Test User
 
     RoleRequest:
       type: object
