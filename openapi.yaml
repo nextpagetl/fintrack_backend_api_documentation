@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: FinTrack360 Backend API
-  version: 1.28.0
+  version: 1.29.0
   description: |
     FinTrack360 Backend REST API Documentation.
 
@@ -98,6 +98,8 @@ tags:
     description: The currently logged-in user
   - name: Export
     description: Excel, CSV or PDF download of a menu's list
+  - name: Import
+    description: Excel import of a menu's data (customer, customer group)
   - name: Dashboard
     description: Company dashboard data
   - name: Roles
@@ -1031,6 +1033,288 @@ paths:
                     errors:
                       columns:
                         - No columns selected for this menu.
+
+  /import:
+    post:
+      tags:
+        - Import
+      summary: Import a menu's data from Excel
+      description: |
+        Imports rows into a menu for the logged-in user's company from an Excel file. One endpoint for
+        every importable menu (like `GET /export`): send the `module` + `menu` and the file. The file
+        must follow the menu's demo file (first row is the header, data rows below).
+
+        **Excel only:** `xlsx` or `xls`, at most 2 MB. CSV is not accepted.
+
+        **All or nothing:** every row is checked first; if any row is wrong, nothing is saved and `422`
+        lists the wrong rows as `row_<N>`, where `<N>` is the row number as Excel shows it (the header is
+        row 1). Completely empty rows are skipped. At least 1 and at most 1000 data rows.
+        `created_by` is the logged-in user.
+
+        **Importable menus:**
+
+        | module | menu | Demo file |
+        |---|---|---|
+        | `customer-manage` | `customer` | [customer.xlsx](https://backend-fintrack360.eduguard360.com/backend/assets/excelFormat/salesSetup/customer/customer.xlsx) |
+        | `customer-manage` | `customer-group` | [customerGroup.xlsx](https://backend-fintrack360.eduguard360.com/backend/assets/excelFormat/salesSetup/customerGroup/customerGroup.xlsx) |
+
+        Any other `module` + `menu` returns `422`.
+
+        ### menu `customer`
+
+        | code | name | customer_group | contact_person | phone | email | address | branch | customer_media | sales_representative | division | district | thana | union | tax_identification_number | credit_limit | status |
+        |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+        | C-001 | Test Customer Ltd | Test Wholesale | Test Contact | 01700000000 | test.customer@example.com | Test Road 1, Dhaka | Test Branch Main | Test Media | Test Sales User | Chattagram | Comilla | Test Thana | Test Union | TIN-001 | 50000 | Approved |
+
+        - **First row is the header** and must be exactly the 17 columns above (lowercase, this order,
+          no other columns). It is not imported. No data after column Q.
+        - Same rules as `POST /customers`: `name` required (2–100 characters), `customer_group` required,
+          `phone` max 20, `email` a valid email (max 55), `address` max 200, `credit_limit` a number ≥ 0;
+          the other columns are optional.
+        - **Names, not ids:** `customer_group`, `branch`, `customer_media`, `sales_representative`,
+          `division`, `district`, `thana` and `union` are given by name, and the name must match
+          **exactly** (spelling, upper / lower case and spaces). A name that is not found is an error
+          (`Customer media 'test media' not found. Use the exact name.`); nothing new is created.
+          - `customer_group`, `customer_media`, `sales_representative`: must be `Approved` and of the company.
+          - `branch`: empty means the default branch.
+          - Location: `district` is looked up inside the `division`, `thana` inside the `district`,
+            `union` inside the `thana`. A lower level needs the level above it
+            (`The division is required when district is given.`).
+        - `status`: empty means `Approved`; otherwise exactly one of `Approved`, `Inactive`, `Pending`,
+          `Cancel` (case-sensitive).
+
+        ### menu `customer-group`
+
+        | name | status |
+        |---|---|
+        | Test Wholesale | Approved |
+        | Test Retail | Inactive |
+
+        - **First row is the header** and must be exactly `name`, `status` (lowercase, this order, no
+          other columns). No data after column B.
+        - `name`: required, 2–100 characters, unique among the customer groups (case-insensitive;
+          soft-deleted groups are not counted) and not repeated in the file.
+        - `status`: **required**, exactly one of `Approved`, `Inactive`, `Pending`, `Cancel` (case-sensitive).
+
+        Required permission: `module:<module>.menu:<menu>.permission:create`
+        (e.g. `module:customer-manage.menu:customer.permission:create`).
+      operationId: importData
+
+      security:
+        - sessionCookie: []
+
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - module
+                - menu
+                - importFile
+              properties:
+                module:
+                  type: string
+                  maxLength: 255
+                  example: customer-manage
+                menu:
+                  type: string
+                  maxLength: 255
+                  description: "`customer` or `customer-group`."
+                  example: customer
+                importFile:
+                  type: string
+                  format: binary
+                  description: An `xlsx` or `xls` file in the menu's demo file format, at most 2 MB. CSV is not accepted.
+
+      responses:
+        "201":
+          description: All rows imported
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          imported:
+                            type: integer
+                            description: Number of rows imported.
+              examples:
+                customer:
+                  summary: menu customer
+                  value:
+                    code: 201
+                    success: true
+                    message: 2 customers imported successfully.
+                    data:
+                      imported: 2
+                customerGroup:
+                  summary: menu customer-group
+                  value:
+                    code: 201
+                    success: true
+                    message: 5 customer groups imported successfully.
+                    data:
+                      imported: 5
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+        "419":
+          $ref: "#/components/responses/CsrfMismatch"
+
+        "422":
+          description: |
+            `module` / `menu` missing or the menu cannot be imported; the file is missing / wrong type /
+            too large, its format does not match the demo file, or one or more rows are wrong. Nothing is
+            saved. File problems are under `errors.importFile`; row problems under `errors.row_<N>`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorEnvelope"
+              examples:
+                missingParams:
+                  summary: module / menu missing
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The module field is required. The menu field is required. "
+                    errors:
+                      module:
+                        - The module field is required.
+                      menu:
+                        - The menu field is required.
+                notImportable:
+                  summary: Menu cannot be imported
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The selected menu cannot be imported. "
+                    errors:
+                      menu:
+                        - The selected menu cannot be imported.
+                missing:
+                  summary: No file sent
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The import file field is required. "
+                    errors:
+                      importFile:
+                        - The import file field is required.
+                wrongType:
+                  summary: Not an xlsx / xls file (e.g. csv)
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The import file must be a file of type: xlsx, xls. "
+                    errors:
+                      importFile:
+                        - "The import file must be a file of type: xlsx, xls."
+                tooLarge:
+                  summary: Larger than 2 MB
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The import file must not be greater than 2048 kilobytes. "
+                    errors:
+                      importFile:
+                        - The import file must not be greater than 2048 kilobytes.
+                invalidFormatCustomer:
+                  summary: "customer: first row is not exactly the 17 demo columns"
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. Invalid file format. First row must be: code, name, customer_group, contact_person, phone, email, address, branch, customer_media, sales_representative, division, district, thana, union, tax_identification_number, credit_limit, status (see the demo file). "
+                    errors:
+                      importFile:
+                        - "Invalid file format. First row must be: code, name, customer_group, contact_person, phone, email, address, branch, customer_media, sales_representative, division, district, thana, union, tax_identification_number, credit_limit, status (see the demo file)."
+                invalidFormatCustomerGroup:
+                  summary: "customer-group: first row is not exactly \"name, status\""
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. Invalid file format. First row must be: name, status (see the demo file). "
+                    errors:
+                      importFile:
+                        - "Invalid file format. First row must be: name, status (see the demo file)."
+                noRows:
+                  summary: Header only, no data rows
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. No data rows found in the file. "
+                    errors:
+                      importFile:
+                        - No data rows found in the file.
+                tooManyRows:
+                  summary: More than 1000 data rows
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. Maximum 1000 rows can be imported at once. "
+                    errors:
+                      importFile:
+                        - Maximum 1000 rows can be imported at once.
+                rowErrorsCustomer:
+                  summary: "customer: wrong rows (name not found / not exact, location, required fields)"
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. Customer media 'Test Mediax' not found. Use the exact name. Customer media 'test media' not found. Use the exact name. The division is required when district is given. The customer group field is required. Invalid file format. Only the demo file columns are allowed. "
+                    errors:
+                      row_2:
+                        - Customer media 'Test Mediax' not found. Use the exact name.
+                      row_3:
+                        - Customer media 'test media' not found. Use the exact name.
+                      row_4:
+                        - The division is required when district is given.
+                      row_5:
+                        - The customer group field is required.
+                      row_6:
+                        - Invalid file format. Only the demo file columns are allowed.
+                rowErrorsCustomerGroup:
+                  summary: "customer-group: wrong rows (status empty / invalid, name problems, extra column data)"
+                  value:
+                    code: 422
+                    success: false
+                    message: "Validation Failed. The status field is required. The status must be one of: Approved, Inactive, Pending, Cancel. The name field is required. The name has already been taken. The name is duplicated in the file (row 6). Invalid file format. Only name and status columns are allowed. "
+                    errors:
+                      row_2:
+                        - The status field is required.
+                      row_3:
+                        - "The status must be one of: Approved, Inactive, Pending, Cancel."
+                      row_4:
+                        - The name field is required.
+                      row_5:
+                        - The name has already been taken.
+                      row_7:
+                        - The name is duplicated in the file (row 6).
+                      row_8:
+                        - Invalid file format. Only name and status columns are allowed.
+
+        "500":
+          description: The file passed validation but saving failed; nothing is saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                code: 500
+                success: false
+                message: "SQLSTATE[HY000]: General error"
+                errors: []
 
   /dashboard:
     get:
@@ -5288,185 +5572,6 @@ paths:
 
         "422":
           $ref: "#/components/responses/CustomerGroupValidationError"
-
-  /customer-groups/import:
-    post:
-      tags:
-        - Customer Groups
-      summary: Bulk import customer groups (Excel)
-      description: |
-        Imports customer groups for the logged-in user's company from an Excel file (API version of the
-        web import `admin/sales-setup-customer-group-import`). The file must follow the demo file:
-        [customerGroup.xlsx](https://backend-fintrack360.eduguard360.com/backend/assets/excelFormat/salesSetup/customerGroup/customerGroup.xlsx)
-
-        | name | status |
-        |---|---|
-        | Wholesale | Approved |
-        | Retail | Inactive |
-
-        - **First row is the header** and must be exactly `name`, `status` (lowercase, this order, no
-          other columns). It is not imported.
-        - Data rows start from row 2. Completely empty rows are skipped. At least 1 and at most 1000 data rows.
-        - `name`: required, 2–100 characters, unique among the customer groups (case-insensitive;
-          soft-deleted groups are not counted) and not repeated in the file.
-        - `status`: **required**, exactly one of `Approved`, `Inactive`, `Pending`, `Cancel` (case-sensitive).
-          An empty or other value (e.g. `approved`, `Active`) is an error.
-        - No data after column B.
-
-        **All or nothing:** every row is checked first; if any row is wrong, nothing is saved and `422`
-        lists the wrong rows as `row_<N>`, where `<N>` is the row number as Excel shows it (the header is
-        row 1). `created_by` is the logged-in user.
-
-        Required permission: `module:customer-manage.menu:customer-group.permission:create`
-      operationId: importCustomerGroups
-
-      security:
-        - sessionCookie: []
-
-      parameters:
-        - $ref: "#/components/parameters/CsrfHeader"
-
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              required:
-                - importFile
-              properties:
-                importFile:
-                  type: string
-                  format: binary
-                  description: An `xlsx` or `xls` file in the demo file's format, at most 2 MB. CSV is not accepted.
-
-      responses:
-        "201":
-          description: All rows imported
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/SuccessEnvelope"
-                  - type: object
-                    properties:
-                      data:
-                        type: object
-                        properties:
-                          imported:
-                            type: integer
-                            description: Number of customer groups imported.
-              example:
-                code: 201
-                success: true
-                message: 5 customer groups imported successfully.
-                data:
-                  imported: 5
-
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-        "403":
-          $ref: "#/components/responses/Forbidden"
-
-        "419":
-          $ref: "#/components/responses/CsrfMismatch"
-
-        "422":
-          description: |
-            The file is missing / wrong type / too large, its format does not match the demo file, or one
-            or more rows are wrong. Nothing is saved. File problems are under `errors.importFile`; row
-            problems under `errors.row_<N>`.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ValidationErrorEnvelope"
-              examples:
-                missing:
-                  summary: No file sent
-                  value:
-                    code: 422
-                    success: false
-                    message: "Validation Failed. The import file field is required. "
-                    errors:
-                      importFile:
-                        - The import file field is required.
-                wrongType:
-                  summary: Not an xlsx / xls file (e.g. csv)
-                  value:
-                    code: 422
-                    success: false
-                    message: "Validation Failed. The import file must be a file of type: xlsx, xls. "
-                    errors:
-                      importFile:
-                        - "The import file must be a file of type: xlsx, xls."
-                tooLarge:
-                  summary: Larger than 2 MB
-                  value:
-                    code: 422
-                    success: false
-                    message: "Validation Failed. The import file must not be greater than 2048 kilobytes. "
-                    errors:
-                      importFile:
-                        - The import file must not be greater than 2048 kilobytes.
-                invalidFormat:
-                  summary: First row is not exactly "name, status" (wrong / missing header, extra column)
-                  value:
-                    code: 422
-                    success: false
-                    message: "Validation Failed. Invalid file format. First row must be: name, status (see the demo file). "
-                    errors:
-                      importFile:
-                        - "Invalid file format. First row must be: name, status (see the demo file)."
-                noRows:
-                  summary: Header only, no data rows
-                  value:
-                    code: 422
-                    success: false
-                    message: "Validation Failed. No data rows found in the file. "
-                    errors:
-                      importFile:
-                        - No data rows found in the file.
-                tooManyRows:
-                  summary: More than 1000 data rows
-                  value:
-                    code: 422
-                    success: false
-                    message: "Validation Failed. Maximum 1000 rows can be imported at once. "
-                    errors:
-                      importFile:
-                        - Maximum 1000 rows can be imported at once.
-                rowErrors:
-                  summary: Wrong rows (status empty / invalid, name problems, extra column data)
-                  value:
-                    code: 422
-                    success: false
-                    message: "Validation Failed. The status field is required. The status must be one of: Approved, Inactive, Pending, Cancel. The name field is required. The name has already been taken. The name is duplicated in the file (row 6). Invalid file format. Only name and status columns are allowed. "
-                    errors:
-                      row_2:
-                        - The status field is required.
-                      row_3:
-                        - "The status must be one of: Approved, Inactive, Pending, Cancel."
-                      row_4:
-                        - The name field is required.
-                      row_5:
-                        - The name has already been taken.
-                      row_7:
-                        - The name is duplicated in the file (row 6).
-                      row_8:
-                        - Invalid file format. Only name and status columns are allowed.
-
-        "500":
-          description: The file passed validation but saving failed; nothing is saved.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorEnvelope"
-              example:
-                code: 500
-                success: false
-                message: "SQLSTATE[HY000]: General error"
-                errors: []
 
   /customer-groups/{id}:
     put:
